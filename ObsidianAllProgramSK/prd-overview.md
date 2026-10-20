@@ -32,9 +32,9 @@ Filter konteks global: tanggal aktif (default: tanggal berjalan) dan kelas aktif
 
 ## 3. Sumber Data & Aliran Event
 
-- Data awal dimuat via query REST API ke backend NestJS.
-- Pembaruan asinkron diterima via event WebSocket `attendance.created`, `seat.status_changed`, dan `device.offline`.
-- Backend tidak mengembalikan citra wajah mentah atau template fingerprint ke antarmuka; hanya kandidat identitas dan hasil kecocokan.
+- Data awal dimuat via Route Handler Next.js (`/api/dashboard/overview-summary`) yang melakukan query agregasi ke Supabase PostgreSQL.
+- Pembaruan asinkron diterima via Supabase Realtime channel (`postgres_changes`) pada tabel `attendance`, `seat_status`, dan `devices`.
+- Route Handler tidak mengembalikan citra wajah mentah atau template fingerprint ke antarmuka; hanya kandidat identitas dan hasil kecocokan.
 
 ## 4. Aturan Logika Sistem
 
@@ -55,6 +55,6 @@ Filter konteks global: tanggal aktif (default: tanggal berjalan) dan kelas aktif
 
 - Pemuatan awal data (loading state per blok entitas).
 - Kegagalan query REST (error + retry).
-- Koneksi WebSocket terputus (mode data basi + auto-reconnect).
+- Koneksi Realtime terputus (mode data basi + auto-reconnect bawaan Supabase).
 - Tidak ada catatan kehadiran pada tanggal aktif (empty state).
 - Perangkat offline (indikator peringatan + timestamp terakhir terlihat).

@@ -22,9 +22,9 @@ Manajemen data kelas dan monitoring telemetri okupansi kursi berbasis sensor loa
 
 ## 3. Sumber Data & Aliran Event
 
-- Query REST API untuk denah kursi & status terkini per kelas.
-- Event WebSocket `seat.status_changed` memperbarui status kursi individual secara real-time.
-- Riwayat perubahan (SeatEvents) diambil via REST paginasi per kursi.
+- Query Route Handler (`GET /api/classes/{id}/seats`) untuk denah kursi & status terkini per kelas.
+- Realtime `seat_status` UPDATE memperbarui status kursi individual secara real-time.
+- Riwayat perubahan (SeatEvents) diambil via Route Handler paginasi per kursi.
 
 ## 4. Aturan Logika Sistem
 
@@ -32,7 +32,7 @@ Manajemen data kelas dan monitoring telemetri okupansi kursi berbasis sensor loa
 2. Data okupansi dan data kehadiran di Menu Attendance diperlakukan sebagai entitas independen.
 3. Pembacaan di bawah ambang batas → `empty`; di atas ambang → `occupied`; pembacaan tidak wajar atau sensor tidak merespons → `unknown`.
 4. Data basi (perangkat tidak melapor dalam ambang batas) diberi indikator stale, bukan dianggap valid.
-5. Fluktuasi di sekitar ambang batas diredam mekanisme histeresis di firmware/backend sebelum status dikirim.
+5. Fluktuasi di sekitar ambang batas diredam mekanisme histeresis di firmware/Route Handler sebelum status dikirim.
 
 ## 5. Aksi Pengguna
 
@@ -48,4 +48,4 @@ Manajemen data kelas dan monitoring telemetri okupansi kursi berbasis sensor loa
 - Kegagalan query REST (error + retry).
 - Sensor `unknown` / disconnected (indikator + penyebab).
 - Data basi (penanda stale + timestamp pembacaan terakhir).
-- Koneksi WebSocket putus (auto-reconnect + sinkronisasi REST ulang).
+- Koneksi Realtime putus (auto-reconnect bawaan Supabase + sinkronisasi REST ulang).

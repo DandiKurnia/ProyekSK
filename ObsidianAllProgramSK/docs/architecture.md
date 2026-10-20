@@ -1,6 +1,6 @@
 # Arsitektur Sistem
 
-> **Rancangan** — menggambarkan arsitektur yang direncanakan. Belum ada implementasi yang diverifikasi di repository ini.
+> **Aktif (2026-10-20)** — topologi utama: ESP32 Fingerprint via **USB Serial** ke komputer kelas. Face service lokal memutus 2FA (wajah + jari), cloud terima 1 hasil final. Versi lama (Wi-Fi polling via cloud) diarsipkan di [`archive/wifi-polling/`](archive/wifi-polling/) sebagai fallback bila kabel USB tidak sampai di lokasi.
 
 ## Tujuan
 
@@ -8,56 +8,64 @@ Dokumen ini menjelaskan arsitektur keseluruhan Smart Classroom Attendance: kompo
 
 Dokumen terkait: [face-recognition.md](face-recognition.md), [fingerprint.md](fingerprint.md), [iot-monitoring.md](iot-monitoring.md), [backend.md](backend.md), [database.md](database.md), [dashboard.md](dashboard.md), [communication-flow.md](communication-flow.md). Kembali ke [README](../../README.md).
 
+## Topologi Fisik
+
+```
+Laptop kelas --USB/COM--> ESP32 --UART--> sensor R503   (fingerprint, daya dari USB)
+Laptop kelas --webcam--> face service lokal              (YuNet + SFace)
+ESP32 kursi --Wi-Fi--> Route Handler Next.js             (HX711, tiap bangku)
+Laptop kelas --HTTPS--> Route Handler Next.js + Supabase (1 hasil final per absensi)
+```
+
 ## Komponen dan Tanggung Jawab
 
 | Komponen | Lokasi | Teknologi | Tanggung jawab |
 |---|---|---|---|
-| Komputer kelas + webcam | Lokal (ruang kelas) | Webcam, Python 3.11, OpenCV | Menangkap frame, menjalankan service pengenalan wajah |
-| Service pengenalan wajah | Lokal (komputer kelas) | FastAPI | Deteksi wajah (YuNet), ekstraksi embedding (SFace), pencocokan, pengiriman kandidat ID ke backend |
-| Backend pusat | Online | NestJS | Validasi identitas ganda, pengaturan verifikasi fingerprint, validasi aturan absensi, penyimpanan transaksi, autentikasi perangkat, WebSocket ke dashboard |
-| Perangkat fingerprint | Lokal (ruang kelas) | ESP32 + sensor R503 | Enrollment template, pencocokan sidik jari lokal, pelaporan hasil ke backend |
-| Perangkat monitoring kursi | Lokal (ruang kelas) | ESP32 + load cell + HX711 | Pembacaan beban, kalibrasi, penentuan status kursi, pelaporan berkala |
-| Database | Online (bersama backend) | PostgreSQL | Penyimpanan data siswa, perangkat, absensi, status kursi |
-| Dashboard | Online / diakses browser | Next.js + React | Visualisasi kehadiran, status kursi, riwayat, rekap |
-
-Satu ESP32 dapat berperan ganda (fingerprint + kursi) atau dipisah menjadi dua perangkat — `TBD`, tergantung implementasi firmware. Dokumentasi ini memakai istilah "ESP32 fingerprint" dan "ESP32 kursi" untuk kejelasan peran.
+| Komputer kelas + webcam | Lokal (ruang kelas) | Webcam, Python 3.10+, OpenCV | Menangkap frame, menjalankan face service |
+| Face service lokal | Lokal (komputer kelas) | FastAPI (`apps/face-service/`) | Deteksi (YuNet), embedding (SFace), pencocokan, perintah fingerprint via USB Serial, kirim hasil final ke cloud |
+| ESP32 Fingerprint | Lokal (meja kelas, kabel USB ke laptop) | ESP32 + sensor R503 | Terima perintah serial, kendalikan R503 (enroll/verify), kembalikan ID template + skor via serial |
+| ESP32 Kursi | Lokal (bawah bangku) | ESP32 + load cell + HX711 | Baca beban via Wi-Fi POST berkala ke Route Handler |
+| Backend cloud | Online | Next.js Route Handlers + Supabase | Terima hasil final, cek aturan (jadwal/duplikat), simpan, Auth + Realtime ke dashboard |
+| Database | Online | Supabase PostgreSQL | Siswa, perangkat, absensi, status kursi |
+| Dashboard | Online / browser | Next.js + React | Visualisasi kehadiran, kursi, riwayat, rekap |
 
 ## Batas Tanggung Jawab Service
 
 Prinsip utama yang **MUST** dipatuhi:
 
-- **FastAPI lokal** bertanggung jawab atas **seluruh pemrosesan wajah** (deteksi, embedding, pencocokan, threshold). Ia tidak memutuskan absensi.
-- **NestJS** adalah satu-satunya pihak yang **memutuskan dan mencatat absensi**. Ia memvalidasi kandidat wajah, mengoordinasikan verifikasi fingerprint, memeriksa aturan (jadwal, kelas, duplikat), lalu menyimpan transaksi.
-- **ESP32** tidak menyimpan logika absensi. Ia hanya melakukan pencocokan biometrik lokal (fingerprint) atau pembacaan sensor (kursi) dan melaporkan hasilnya.
-- **Dashboard** bersifat read-mostly: menampilkan data dari backend, tidak menulis absensi langsung.
+- **Face service lokal** memutus **seluruh 2FA** (wajah cocok + jari cocok = absen valid). Ia mengirim 1 hasil final ke cloud, bukan kandidat mentah.
+- **Route Handler Next.js** memvalidasi hasil final (jadwal, kelas, duplikat via constraint unik) lalu menyimpan. Ia bukan perantara perintah fingerprint.
+- **ESP32 Fingerprint** tidak menyimpan logika absensi — hanya driver R503 via perintah serial.
+- **ESP32 Kursi** independen via Wi-Fi; kursinya telemetri, bukan bukti absensi.
+- **Dashboard** read-mostly: tampilkan data backend, tidak menulis absensi langsung.
 
 ## Hubungan Antarkomponen
 
-- Komputer kelas (FastAPI) → NestJS: HTTPS REST API, arah keluar (outbound) dari jaringan sekolah.
-- ESP32 → NestJS dan NestJS → ESP32: HTTP polling sebagai rancangan awal; ESP32 selalu memulai permintaan (lihat [communication-flow.md](communication-flow.md)).
-- NestJS ↔ PostgreSQL: koneksi database internal (bukan melalui internet publik).
-- NestJS → Dashboard: REST API untuk data awal + WebSocket untuk pembaruan real-time.
-- Tidak ada komunikasi langsung antara FastAPI lokal dan ESP32; semua koordinasi melalui NestJS.
+- Face service ↔ ESP32 Fingerprint: **USB Serial** (`pyserial`, COM port, 115200 baud). Face service selalu inisiator (`VERIFY:<student_id>`, `ENROLL:<student_id>:<slot>`); ESP32 menjawab (`MATCH:<slot>:<score>`, `NO_MATCH`, `TIMEOUT`, `ERROR:<sebab>`).
+- Face service → Route Handler: **HTTPS POST** 1 hasil final per absensi (outbound, tanpa port forwarding).
+- ESP32 Kursi → Route Handler: **HTTPS POST** status berkala (Wi-Fi sekolah, outbound).
+- Route Handler ↔ Supabase: koneksi internal + Realtime (`postgres_changes`) ke dashboard.
+- Face service **MUST NOT** diekspos ke internet; hanya localhost/LAN kelas + port serial lokal.
 
 ## Diagram Arsitektur
 
 ```mermaid
 flowchart TB
-    subgraph Kelas["Jaringan Sekolah (outbound only)"]
-        WC[Webcam] --> PC[Komputer Kelas<br/>FastAPI + YuNet + SFace]
-        R503[Sensor R503] --- ESPF[ESP32 Fingerprint]
+    subgraph Kelas["Ruang Kelas (lokal)"]
+        WC[Webcam] --> PC[Komputer Kelas<br/>Face Service + YuNet + SFace]
+        PC <-->|"USB Serial (pyserial)"| ESPF[ESP32 Fingerprint]
+        ESPF --- R503[Sensor R503]
         LC[Load Cell + HX711] --- ESPK[ESP32 Kursi]
     end
     subgraph Cloud["Online"]
-        BE[Backend NestJS]
-        DB[(PostgreSQL)]
+        API[Route Handler Next.js]
+        DB[(Supabase PostgreSQL)]
         DSH[Dashboard Next.js]
     end
-    PC -- "HTTPS: kandidat wajah" --> BE
-    ESPF -- "HTTP polling: hasil fingerprint" --> BE
-    ESPK -- "HTTP polling: status kursi" --> BE
-    BE --- DB
-    BE -- "REST + WebSocket" --> DSH
+    PC -- "HTTPS: 1 hasil final" --> API
+    ESPK -- "HTTPS: status kursi" --> API
+    API --- DB
+    API -- "REST + Realtime" --> DSH
 ```
 
 ## Diagram Urutan (Alur Absensi Normal)
@@ -65,54 +73,58 @@ flowchart TB
 ```mermaid
 sequenceDiagram
     participant S as Siswa
-    participant F as FastAPI Lokal
-    participant B as NestJS
-    participant E as ESP32 Fingerprint
-    participant D as PostgreSQL
+    participant F as Face Service Lokal
+    participant E as ESP32 + R503 (USB)
+    participant B as Route Handler
+    participant D as Supabase
     participant W as Dashboard
     S->>F: Berdiri di depan webcam
-    F->>F: Deteksi (YuNet) + embedding (SFace) + cocokkan
-    F->>B: POST kandidat student_id + confidence
-    B->>E: Perintah verifikasi (diambil via polling)
+    F->>F: YuNet live + SFace 1x + cocokkan
+    F->>E: Serial VERIFY (kandidat student_id)
     S->>E: Tempel jari ke R503
     E->>E: Cocokkan template lokal
-    E->>B: Hasil verifikasi (template_id cocok / gagal)
-    B->>B: Samakan identitas wajah vs fingerprint + cek aturan
-    B->>D: INSERT attendance (jika lolos)
-    B->>W: Event WebSocket attendance.created
+    E-->>F: Serial MATCH slot + skor / NO_MATCH / TIMEOUT
+    F->>F: Samakan wajah vs jari + TTL sesi 30 dtk
+    F->>B: POST hasil final 2FA
+    B->>D: INSERT attendance (cek duplikat)
+    B->>W: Event Realtime attendance INSERT
 ```
 
 ## Alur Normal
 
-1. FastAPI mengenali wajah dan mengirim kandidat ke NestJS.
-2. NestJS menandai sesi verifikasi "menunggu fingerprint" untuk kandidat tersebut.
-3. ESP32 fingerprint mengambil perintah tersebut saat polling, meminta siswa menempelkan jari.
-4. Hasil pencocokan dikirim kembali ke NestJS.
-5. NestJS mencocokkan identitas, memeriksa jadwal/kelas/duplikat, menyimpan absensi.
-6. Dashboard menerima event dan memperbarui tampilan.
+1. Face service mengunci kandidat wajah (SFace 1x, anti-stale: IoU + TTL).
+2. Face service mengirim `VERIFY` via USB Serial; R503 menyala, siswa menempelkan jari.
+3. ESP32 mengembalikan `MATCH`/`NO_MATCH`/`TIMEOUT` via serial dalam milidetik.
+4. Face service menyamakan identitas wajah vs slot fingerprint + cek TTL sesi.
+5. Face service POST 1 hasil final ke Route Handler; cloud cek jadwal/duplikat, simpan.
+6. Dashboard menerima event Realtime dan memperbarui tampilan.
 
 ## Kondisi Kegagalan
 
-| Kondisi | Penanganan (rancangan) |
+| Kondisi | Penanganan |
 |---|---|
-| Wajah tidak dikenal / confidence di bawah threshold | FastAPI tidak mengirim kandidat; tidak ada absensi. Lihat [face-recognition.md](face-recognition.md). |
-| Banyak wajah dalam frame | FastAPI menolak frame atau memilih wajah terbesar — `TBD`; tidak ada absensi otomatis. |
-| Fingerprint tidak cocok / timeout | ESP32 melaporkan gagal; NestJS membatalkan sesi verifikasi. Lihat [fingerprint.md](fingerprint.md). |
-| Identitas wajah ≠ identitas fingerprint | Absensi ditolak; kejadian dicatat untuk audit — `TBD`. |
-| Absensi duplikat (siswa sudah tercatat hari itu) | Ditolak oleh constraint database + pengecekan aplikasi. Lihat [database.md](database.md). |
-| Internet sekolah terputus | FastAPI/ESP32 melakukan retry dengan backoff; sesi kedaluwarsa — `TBD`. Tidak ada mode offline penuh. |
-| Backend / database down | Perangkat melakukan retry; dashboard menampilkan status error. |
-| Sensor kursi tidak stabil / terputus | Status kursi ditandai `unknown`; tidak memengaruhi absensi. Lihat [iot-monitoring.md](iot-monitoring.md). |
+| Wajah tidak dikenal / di bawah threshold | Tidak ada perintah serial; tidak ada absensi. Lihat [face-recognition.md](face-recognition.md). |
+| Banyak wajah dalam frame | Wajah terbesar diproses; antrean satu orang. |
+| Fingerprint tidak cocok / timeout | ESP32 lapor via serial; sesi lokal dibatalkan. Lihat [fingerprint.md](fingerprint.md). |
+| Identitas wajah ≠ identitas fingerprint | Absensi ditolak; dicatat untuk audit. |
+| Absensi duplikat | Ditolak constraint unik DB + cek aplikasi. Lihat [database.md](database.md). |
+| Kabel USB lepas / COM port hilang | Face service tandai perangkat `offline` lokal; sesi dibatalkan; operator colok ulang → auto-reconnect. |
+| Internet sekolah terputus | Hasil final di-buffer lokal terbatas, kirim ulang saat pulih; absensi saat putus tidak real-time. |
+| Backend / database down | Face service retry dengan backoff; dashboard banner error. |
+| Sensor kursi tidak stabil / terputus | Status `unknown`; tidak memengaruhi absensi. Lihat [iot-monitoring.md](iot-monitoring.md). |
 
-## Kebutuhan Konektivitas Jaringan
+## Kebutuhan Konektivitas
 
-- Backend berjalan online dengan alamat HTTPS publik.
-- Komputer kelas dan ESP32 hanya membutuhkan **koneksi internet keluar** (HTTPS/HTTP). Sistem **MUST NOT** mengharuskan port forwarding, IP publik sekolah, atau perubahan konfigurasi router/Wi-Fi.
-- Identitas perangkat memakai device ID + kredensial, bukan alamat IP lokal (detail di [communication-flow.md](communication-flow.md)).
-- Estimasi kebutuhan bandwidth rendah (payload JSON kecil + polling berkala); angka pasti `TBD` setelah pengujian.
+- Face service → cloud dan ESP32-Kursi → cloud: **HTTPS keluar** saja. **MUST NOT** butuh port forwarding / IP publik / ubah router.
+- Face service ↔ ESP32-FP: **kabel USB** (daya + data, tanpa jaringan sama sekali).
+- Identitas perangkat cloud memakai device ID + kredensial, bukan IP lokal (detail di [communication-flow.md](communication-flow.md)).
+
+## Fallback: Topologi Wi-Fi Polling (Arsip)
+
+Bila di lokasi ternyata kabel USB tidak sampai (jarak meja–laptop > 2 m, port kurang, dsb.), gunakan topologi cadangan: ESP32 Fingerprint via Wi-Fi polling ke cloud (`device_commands` + `command_id`). Seluruh dokumen versi itu tersimpan utuh di [`archive/wifi-polling/`](archive/wifi-polling/) (`architecture.md`, `backend.md`, `communication-flow.md`, `fingerprint.md`, `database.md`). Beralih ke fallback berarti mengembalikan 5 file tersebut + kolom `device_commands` — lihat catatan migrasi di daily `2026-10-20` §5.
 
 ## Catatan Implementasi
 
-- Target awal: prototipe ~100 siswa, pemrosesan wajah berbasis CPU.
-- HTTP polling dipilih sebagai rancangan awal komunikasi backend–ESP32 karena sederhana dan lolos NAT/firewall sekolah. Migrasi ke MQTT/WebSocket `TBD` bila dibutuhkan (lihat [communication-flow.md](communication-flow.md)).
-- Seluruh endpoint, skema JSON, dan ambang batas di dokumen ini berstatus **Rancangan** hingga implementasi diverifikasi.
+- Target awal: prototipe ~100 siswa, pemrosesan wajah + 2FA berbasis CPU lokal.
+- Face service terverifikasi sebagian (`apps/face-service/`, FastAPI `/health` + `/recognize` + `/enroll`). Modul serial (`fingerprint_serial.py`) + firmware ESP32 dibuat saat hardware tersedia.
+- Seluruh endpoint cloud, skema JSON, dan ambang batas berstatus **Rancangan** hingga implementasi diverifikasi.

@@ -31,14 +31,14 @@ Agregasi data historis absensi dan telemetri okupansi untuk satu periode, dengan
 
 ## 3. Sumber Data & Aliran Event
 
-- Query REST API agregasi (dilakukan di backend, bukan di sisi klien).
+- Query Route Handler Next.js (`GET /api/reports/summary`) agregasi langsung via SQL PostgreSQL Supabase (bukan di sisi klien).
 - Filter: rentang tanggal, kelas. Perubahan filter memicu query ulang.
-- Halaman ini read-mostly; tidak berlangganan WebSocket real-time.
+- Halaman ini read-mostly; tidak berlangganan Supabase Realtime.
 
 ## 4. Aturan Logika Sistem
 
 1. Status `Late` selalu dipisah dari `Present` di seluruh agregasi.
-2. Agregasi dilakukan backend; antarmuka hanya menampilkan hasil.
+2. Agregasi dilakukan di PostgreSQL/Route Handler; antarmuka hanya menampilkan hasil.
 3. Tidak ada prediksi, skor risiko, atau kesimpulan yang tidak didukung data.
 4. Ekspor hanya tersedia untuk Admin dan Teacher (sesuai matriks akses di `prd-index.md`).
 5. Preview periode harus tampil sebelum aksi ekspor diaktifkan.

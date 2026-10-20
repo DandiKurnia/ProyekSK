@@ -1,93 +1,95 @@
 # Communication Flow — Komunikasi Antarkomponen
 
-> **Rancangan** — rute, autentikasi, dan parameter retry belum diimplementasikan.
+> **Aktif (2026-10-20)** — rute utama: face service ↔ ESP32 Fingerprint via **USB Serial**; face service → cloud via HTTPS; ESP32 Kursi → cloud via HTTPS. Versi Wi-Fi polling lama diarsipkan di [`archive/wifi-polling/communication-flow.md`](archive/wifi-polling/communication-flow.md).
 
 ## Prinsip Dasar
 
-1. Backend NestJS berjalan **online** dengan endpoint HTTPS publik.
-2. Semua komponen di jaringan sekolah (komputer kelas, ESP32) **hanya memulai koneksi keluar** — tanpa port forwarding, tanpa perubahan router/Wi-Fi.
-3. Identitas perangkat memakai **device ID + kredensial**, bukan alamat IP lokal (IP lokal dapat berubah dan tidak aman sebagai identitas).
-4. Yang memulai permintaan menentukan arah data — lihat diagram di bawah.
+1. Route Handler Next.js berjalan **online** dengan endpoint HTTPS publik.
+2. Komponen kelas yang memakai jaringan (face service, ESP32 Kursi) **hanya memulai koneksi keluar** — tanpa port forwarding, tanpa perubahan router/Wi-Fi.
+3. ESP32 Fingerprint **tidak memakai jaringan sama sekali** — kabel USB langsung ke laptop.
+4. Identitas perangkat cloud memakai **device ID + kredensial**, bukan alamat IP lokal.
+5. Yang memulai permintaan menentukan arah data — lihat diagram di bawah.
 
 ## Pola Komunikasi per Rute
 
 | Rute | Protokol | Pemulai | Catatan |
 |---|---|---|---|
-| FastAPI → NestJS | HTTPS REST | FastAPI | Kirim kandidat wajah; retry saat gagal |
-| ESP32 → NestJS | HTTP(S) polling | ESP32 | Ambil perintah + laporkan hasil secara berkala |
-| NestJS → PostgreSQL | Koneksi DB internal | NestJS | Bukan lewat internet publik |
-| NestJS → Dashboard | REST + WebSocket | Dashboard (REST) / NestJS (push WS) | Data awal via REST, update via WS |
-| FastAPI ↔ ESP32 | — | — | **Tidak berkomunikasi langsung**; semua via NestJS |
+| Face service ↔ ESP32 Fingerprint | USB Serial (`pyserial`, 115200 baud) | Face service | `VERIFY`/`ENROLL`/`DELETE`/`PING` → `MATCH`/`NO_MATCH`/`TIMEOUT`/`ERROR`; latensi ms |
+| Face service → Route Handler | HTTPS REST | Face service | 1 hasil final 2FA per absensi; retry saat gagal |
+| ESP32 Kursi → Route Handler | HTTPS POST berkala | ESP32 Kursi | Status kursi; interval di `app_config` |
+| Route Handler ↔ Supabase | Koneksi internal + Realtime | Keduanya | Bukan lewat internet publik |
+| Route Handler → Dashboard | REST + Supabase Realtime | Dashboard (REST) / Supabase (push) | Data awal via REST, update via Realtime |
 
-### FastAPI Lokal → NestJS Online
-
-- FastAPI memanggil `POST /api/v1/face-candidates` (rancangan) via HTTPS dengan autentikasi perangkat.
-- Respons `202` berisi `session_id` dan batas waktu; respons lain berarti kandidat ditolak/duplikat.
-- Retry: exponential backoff + jitter; buffer hasil terbatas saat internet putus — `TBD`.
-
-### NestJS ↔ ESP32 (HTTP Polling)
-
-Rancangan awal memilih **HTTP polling** karena sederhana, NAT/firewall-friendly (ESP32 selalu klien), dan cukup untuk skala ~100 siswa:
+### Face Service ↔ ESP32 Fingerprint (USB Serial)
 
 ```mermaid
 sequenceDiagram
-    participant E as ESP32
-    participant B as NestJS
-    loop Setiap interval (TBD)
-        E->>B: GET /devices/{id}/commands (poll)
-        B-->>E: Daftar perintah (atau kosong)
-        E->>E: Eksekusi perintah (verifikasi jari / baca kursi)
-        E->>B: POST /devices/{id}/command-results
-    end
+    participant F as Face Service (PC)
+    participant E as ESP32 + R503 (USB)
+    F->>E: VERIFY:5 (atau ENROLL:slot / DELETE:slot / PING)
+    E->>E: Kendalikan R503 via UART
+    E-->>F: MATCH:slot:skor / NO_MATCH / TIMEOUT / ERROR:kode
 ```
 
-- Interval polling `TBD` (trade-off: responsivitas vs beban server vs baterai/kuota).
-- Alternatif masa depan: MQTT atau WebSocket perangkat — `TBD`, tidak bagian dari rancangan awal.
+- Terminator baris `\n`; timeout baca serial = timeout perintah + 1 detik.
+- Kabel lepas → `SerialException` → tandai `offline` lokal → auto-reconnect saat dicolok ulang.
+- Detail perintah: [fingerprint.md](fingerprint.md).
 
-### NestJS ↔ PostgreSQL
+### Face Service → Route Handler (Hasil Final)
 
-Koneksi database dari backend (connection pooling). Tidak diekspos ke internet; akses hanya dari backend.
+- `POST /api/attendance` berisi `student_id`, `face_confidence`, `fingerprint_slot`, `fingerprint_score` (rancangan).
+- Respons: record tersimpan atau ditolak (duplikat/aturan).
+- Retry: exponential backoff + jitter; buffer lokal terbatas saat internet putus.
 
-### NestJS → Dashboard Next.js
+### ESP32 Kursi → Route Handler
+
+- `POST /api/seats/status` berkala (Wi-Fi sekolah, outbound).
+- Interval dan ambang offline di `app_config` (`device_offline_seconds`).
+
+### Route Handler → Dashboard Next.js
 
 - REST untuk data awal dan riwayat (dashboard memulai).
-- WebSocket untuk push real-time: backend mengirim event saat absensi tersimpan atau status kursi berubah (detail di [dashboard.md](dashboard.md)).
+- Supabase Realtime (`postgres_changes` pada `attendance`, `seat_status`, `devices`) untuk push (detail di [dashboard.md](dashboard.md)).
 
 ## Autentikasi Perangkat
 
-- Setiap perangkat punya `device_id` unik + kredensial rahasia yang didaftarkan di backend (lihat [database.md](database.md)).
-- Kredensial dikirim pada setiap permintaan (header/token — skema pasti `TBD`); backend memverifikasi sebelum memproses.
-- Perangkat tanpa kredensial valid ditolak; percobaan berulang dicatat — rate limiting `TBD`.
-- Alamat IP lokal **tidak** dipakai sebagai identitas atau pembeda perangkat.
+- Setiap perangkat cloud punya `device_id` unik + kredensial rahasia di Supabase (lihat [database.md](database.md)).
+- Kredensial dikirim pada setiap permintaan HTTPS (header/token — skema pasti `TBD`); backend memverifikasi sebelum memproses.
+- Perangkat serial lokal (ESP32-FP) tidak butuh kredensial cloud — akses fisik ke kabel USB adalah batas keamanannya; enrollment tetap butuh operator terautentikasi di sisi PC.
+- Alamat IP lokal **tidak** dipakai sebagai identitas.
 
 ## Diagram Arah Komunikasi
 
 ```mermaid
 flowchart LR
-    PC[FastAPI Lokal<br/>Komputer Kelas] -- "HTTPS REST (keluar)" --> BE[NestJS]
-    ESPF[ESP32 Fingerprint] -- "HTTP polling (keluar)" --> BE
-    ESPK[ESP32 Kursi] -- "HTTP polling (keluar)" --> BE
-    BE -- "koneksi DB internal" --> DB[(PostgreSQL)]
-    DSH[Dashboard Next.js] -- "REST (pull)" --> BE
-    BE -- "WebSocket (push)" --> DSH
+    PC[Face Service<br/>Komputer Kelas] <-->|"USB Serial" | ESPF[ESP32 Fingerprint]
+    PC -- "HTTPS: hasil final" --> API[Route Handler Next.js]
+    ESPK[ESP32 Kursi] -- "HTTPS: status kursi" --> API
+    API -- "internal + Realtime" --> DB[(Supabase)]
+    DSH[Dashboard Next.js] -- "REST pull + Realtime" --> API
 ```
 
-Semua panah keluar dari jaringan sekolah adalah **koneksi yang dimulai perangkat kelas** — tidak ada koneksi masuk yang diinisiasi dari internet ke jaringan sekolah.
+Panah HTTPS keluar dari jaringan sekolah selalu **dimulai perangkat kelas** — tidak ada koneksi masuk dari internet. Jalur USB tidak menyentuh jaringan sama sekali.
 
 ## Retry, Timeout, dan Internet Terputus
 
-| Skenario | Penanganan (rancangan) |
+| Skenario | Penanganan |
 |---|---|
-| Permintaan FastAPI gagal/timeout | Retry dengan exponential backoff + jitter; batas percobaan `TBD`; hasil disimpan sementara |
-| ESP32 gagal polling | Coba interval berikutnya; beri tanda offline ke backend setelah `TBD` kali gagal berturut |
-| Sesi verifikasi kedaluwarsa | Backend menandai `expired`; perintah di antrian dibatalkan |
-| Internet sekolah putus total | Perangkat menyimpan hasil terbatas (buffer `TBD`) dan kirim ulang saat pulih; absensi saat putus tidak real-time |
-| Backend down | Perangkat retry; dashboard menampilkan banner error dan indikator koneksi WebSocket putus |
-| WebSocket dashboard putus | Reconnect otomatis; ambil ulang data via REST agar tidak ada event yang terlewat |
-| Kredensial tidak valid / dicurigai | Tolak permintaan; tandai perangkat untuk ditinjau — prosedur rotasi kredensial `TBD` |
+| USB Serial timeout / kabel lepas | Batalkan sesi lokal; tandai `offline`; auto-reconnect |
+| POST hasil final gagal/timeout | Retry exponential backoff; buffer lokal terbatas; kirim ulang saat pulih |
+| ESP32 Kursi gagal POST | Coba interval berikutnya; tandai offline setelah ambang batas |
+| Sesi 2FA lokal kedaluwarsa (30 dtk) | Tandai `expired`; tanpa pengiriman cloud |
+| Internet sekolah putus total | Buffer lokal terbatas; absensi saat putus tidak real-time |
+| Backend down | Face service retry; dashboard banner error |
+| Realtime dashboard putus | Reconnect otomatis; refresh via REST agar tidak ada event terlewat |
+| Kredensial tidak valid | Tolak permintaan; tandai perangkat untuk ditinjau |
+
+## Fallback Wi-Fi Polling (Arsip)
+
+Bila kabel USB tidak sampai di lokasi: ESP32 Fingerprint diganti firmware Wi-Fi polling (`GET /devices/{id}/commands` + `POST command-results`, tabel `device_commands`). Spesifikasi lengkap di [`archive/wifi-polling/communication-flow.md`](archive/wifi-polling/communication-flow.md).
 
 ## Catatan Implementasi
 
-- HTTP polling adalah **pilihan awal**, bukan keputusan permanen; migrasi ke mekanisme push perangkat dapat dipertimbangkan dengan alasan teknis jelas.
-- Semua komunikasi luar memakai HTTPS/TLS; sertifikat dan domain backend `TBD`.
-- Ukuran payload dibuat kecil (JSON ringkas) agar polling murah.
+- USB Serial adalah **pilihan utama** karena latency ms + tanpa ketergantungan Wi-Fi untuk faktor kedua.
+- Semua komunikasi cloud memakai HTTPS/TLS; sertifikat dan domain `TBD`.
+- Payload JSON ringkas agar murah.

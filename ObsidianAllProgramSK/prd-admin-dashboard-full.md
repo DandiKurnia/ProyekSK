@@ -1,21 +1,19 @@
 # PRD Sistem Lengkap — Admin Dashboard Smart Classroom Attendance
 
-> **Dokumen Spesifikasi Fungsional Tunggal (Master System PRD)**  
-> Disusun sebagai acuan arsitektur sistem dan data untuk pembuatan antarmuka web, perancangan komponen UI, dan implementasi frontend.  
-> **Fokus:** Aliran data, struktur menu/halaman, logika sistem, aksi pengguna, role access (RBAC), integrasi REST/WebSocket, dan penanganan exception.  
+> **Dokumen Spesifikasi Fungsional Tunggal (Master System PRD)**
+> Disusun sebagai acuan arsitektur sistem dan data untuk pembuatan antarmuka web, perancangan komponen UI, dan implementasi frontend.
+> **Fokus:** Aliran data, struktur menu/halaman, logika sistem, aksi pengguna, role access (RBAC), integrasi REST/Supabase Realtime, dan penanganan exception.
 > **Bebas styling visual:** Tidak memuat aturan warna hex, tipografi, tema, atau elemen grafis murni.
 
 ---
 
 ## 1. Konteks Arsitektur & Batasan Sistem
 
-Sistem ini adalah antarmuka web administratif (*Admin Dashboard*) untuk **Smart Classroom Attendance & Monitoring**, berbasis Hybrid AIoT:
-
-1. **Backend Pusat**: NestJS berjalan online (HTTPS REST + WebSocket Gateway), terhubung ke database PostgreSQL. NestJS adalah satu-satunya otak penentu status absensi dan validasi sesi.
-2. **Edge Pengenal Wajah**: Komputer kelas lokal menjalankan FastAPI + OpenCV YuNet & SFace. Melakukan deteksi/ekstraksi wajah lokal, lalu mengirim kandidat ID siswa ke NestJS via HTTPS.
-3. **Edge Biometrik Sidik Jari**: ESP32 + sensor R503 terhubung ke Wi-Fi sekolah. Melakukan HTTP long-polling ke NestJS untuk mengambil antrian verifikasi sidik jari, mencocokkan template di ROM lokal sensor, dan mengirim hasil cocok/tidak ke NestJS.
-4. **Edge Telemetri Kursi**: ESP32 + sensor load cell & modul amplifier HX711 memantau tekanan fisik kursi. Mengirim status keterisian kursi berkala ke NestJS via HTTP POST.
-5. **Dashboard Web (Sistem Ini)**: Berjalan di browser staf sekolah (Admin, Guru/Teacher, Observer). Mengambil data via REST HTTPS dan menerima pembaruan instan via WebSocket.
+1. **Backend**: Satu project Next.js full-stack (Route Handlers `/api/*` + Supabase). Route Handlers adalah satu-satunya otak penentu status absensi; Supabase menyediakan PostgreSQL + Auth + Realtime. Tanpa NestJS, tanpa WebSocket gateway custom.
+2. **Edge Pengenal Wajah**: Komputer kelas lokal menjalankan FastAPI + OpenCV YuNet & SFace. Melakukan deteksi/ekstraksi wajah lokal, memicu verifikasi fingerprint ke ESP32 via USB Serial, lalu mengirim **1 hasil final 2FA** ke Route Handler Next.js (`POST /api/attendance`) via HTTPS.
+3. **Edge Biometrik Sidik Jari**: ESP32 + sensor R503 terhubung ke laptop kelas via **kabel USB (Serial COM)**. Menerima perintah serial (`VERIFY`, `ENROLL`, `DELETE`), mencocokkan template di ROM lokal R503, dan mengembalikan hasil milidetik via serial ke face service (tanpa Wi-Fi / antrean cloud). *Catatan cadangan:* bila kabel USB tidak sampai di lokasi, sistem beralih ke fallback Wi-Fi polling yang diarsipkan di `docs/archive/wifi-polling/`.
+4. **Edge Telemetri Kursi**: ESP32 + sensor load cell & modul amplifier HX711 memantau tekanan fisik kursi. Mengirim status keterisian kursi berkala ke Route Handler Next.js via HTTP POST.
+5. **Dashboard Web + UI Check-in Kelas (Sistem Ini)**: Satu project Next.js berisi dua route group — `(admin)` untuk browser staf (Admin, Guru/Teacher, Observer) dan `(classroom)` untuk halaman check-in kios di PC kelas. Data diambil via REST HTTPS; pembaruan instan via Supabase Realtime.
 
 ### Batasan Ruang Lingkup (Scope Boundaries)
 - **Hanya untuk staf sekolah**: Halaman login dan dashboard hanya untuk peran administratif (`Admin`, `Teacher`, `Observer`).
@@ -67,8 +65,8 @@ Menampilkan daftar rute utama dengan indikator halaman aktif:
 ### B. Header Global
 Komponen persisten di bagian atas setiap halaman:
 1. **Indikator Konektivitas Pusat**:
-   - Status Backend API NestJS (`Connected` / `Degraded` / `Disconnected`).
-   - Status Kanal WebSocket (`Live` / `Reconnecting` / `Offline`).
+   - Status Next.js API (`Connected` / `Degraded` / `Disconnected`).
+   - Status Kanal Supabase Realtime (`Live` / `Reconnecting` / `Offline`).
 2. **Global Context Filter (Pemilih Kelas & Tanggal)**:
    - Pemilih kelas aktif: menentukan cakupan data yang ditampilkan di halaman saat ini (opsi: "Semua Kelas" untuk Admin, atau daftar kelas terdaftar).
    - Penanda tanggal aktif (default: hari ini).
@@ -94,9 +92,9 @@ Gerbang pengaman tunggal. Tanpa sesi valid, seluruh rute internal (`/overview`, 
   - `password`: Kata sandi akun.
   - Opsi: Penanda sesi panjang ("Ingat Saya" — *opsional/TBD*).
 - **Output Sistem**:
-  - Sesi terautentikasi (HTTP-only secure cookie atau JWT token sesuai konfigurasi NestJS).
-  - Objek identitas staf (`user_id`, `name`, `email`, `role`, `assigned_classes`).
-  - Redirect otomatis ke URL tujuan semula (*return URL*) atau default `/overview`.
+- Sesi terautentikasi via Supabase Auth (session cookie httpOnly dikelola Supabase SSR).
+- Objek identitas staf (`user_id`, `name`, `email`, `role`, `assigned_classes`) dari tabel profil + custom claims.
+- Redirect otomatis ke URL tujuan semula (*return URL*) atau default `/overview`.
 
 #### 3. Logika & Aturan Sistem
 - Proteksi tebakan akun (*anti-enumeration*): Pesan kegagalan login wajib generik, misalnya *"Identifier atau kata sandi tidak cocok"*.
@@ -137,11 +135,11 @@ Pusat kontrol pemantauan operasional real-time harian. Menampilkan performa keha
    - Timestamp pelaporan data terakhir (*last seen*).
 
 #### 3. Sumber Data & Aliran Event
-- Pemuatan awal via REST: `GET /api/v1/dashboard/overview-summary?class_id=...&date=...`.
-- Pembaruan instan via WebSocket:
-  - Event `attendance.created`: Memperbarui counter kehadiran dan menyisipkan baris teratas pada log aktivitas.
-  - Event `seat.status_changed`: Memperbarui counter okupansi kursi.
-  - Event `device.offline`: Mengubah status indikator perangkat menjadi peringatan offline.
+- Pemuatan awal via REST: `GET /api/dashboard/overview-summary?class_id=...&date=...` (Route Handler Next.js query Supabase).
+- Pembaruan instan via Supabase Realtime (`postgres_changes`):
+  - `attendance` INSERT/UPDATE: Memperbarui counter kehadiran dan menyisipkan baris teratas pada log aktivitas.
+  - `seat_status` UPDATE: Memperbarui counter okupansi kursi.
+  - `devices` UPDATE (offline): Mengubah status indikator perangkat menjadi peringatan offline.
 
 #### 4. Aksi Pengguna
 - Mengganti filter kelas aktif.
@@ -151,7 +149,7 @@ Pusat kontrol pemantauan operasional real-time harian. Menampilkan performa keha
 
 #### 5. Penanganan Exception & State
 - **Pemuatan Awal**: Tampilkan indikator loading pada masing-masing blok metrik secara independen.
-- **Koneksi WebSocket Terputus**: Indikator peringatan "Mode Data Basi (WebSocket Terputus) — Mencoba menyambung kembali". Data tidak direset, sistem melakukan polling cadangan via REST setiap 30 detik.
+- **Koneksi Realtime Terputus**: Indikator peringatan "Mode Data Basi (Realtime Terputus) — Mencoba menyambung kembali". Data tidak direset, sistem melakukan polling cadangan via REST setiap 30 detik.
 - **Nol Data**: Tampilkan *empty state* informatif jika belum ada kegiatan absensi pada tanggal yang dipilih.
 
 ---
@@ -176,10 +174,10 @@ Pusat pencarian, audit, dan peninjauan seluruh catatan absensi siswa. Menyediaka
    - Timeline runut waktu (kronologis):
      - Waktu deteksi wajah oleh edge PC.
      - Kandidat siswa yang diidentifikasi oleh model SFace beserta skor similarity.
-     - Waktu pengiriman perintah polling verifikasi ke antrian ESP32.
+     - Waktu perintah serial `VERIFY` ke ESP32 Fingerprint via USB (latensi milidetik, tanpa antrean cloud).
      - Waktu verifikasi sidik jari di sensor R503 beserta nomor template ID.
-     - Keputusan akhir validasi oleh NestJS.
-     - Timestamp penulisan catatan permanen ke database PostgreSQL.
+    - Keputusan akhir validasi oleh Route Handler Next.js (`POST /api/attendance/verify`).
+    - Timestamp penulisan catatan permanen ke Supabase PostgreSQL.
 
 #### 3. Aksi Pengguna
 - **Filter Multi-Kriteria**:
@@ -194,7 +192,7 @@ Pusat pencarian, audit, dan peninjauan seluruh catatan absensi siswa. Menyediaka
 #### 4. Penanganan Exception & State
 - Hasil pencarian kosong: Tampilkan pesan *empty search state* dengan opsi reset filter.
 - Kegagalan pengambilan data: Indikator error dengan tombol coba lagi (*retry query*).
-- Transaksi sedang berjalan (`Pending`): Indikator status bergerak dinamis, memperbarui otomatis jika event WebSocket `attendance.updated` diterima.
+- Transaksi sedang berjalan (`Pending`): Indikator status bergerak dinamis, memperbarui otomatis jika Realtime `attendance_sessions` UPDATE diterima.
 
 ---
 
@@ -231,26 +229,26 @@ Ekstraksi vektor embedding via SFace (128-d float)
                ↓
 Simpan embedding di penyimpanan lokal Edge PC
                ↓
-Callback status berhasil ke NestJS & Dashboard
+Callback status berhasil ke Route Handler Next.js & Dashboard via Supabase Realtime
 ```
 
 ```
 [Workflow 2: Enrollment Sidik Jari]
 Operator memilih siswa & menekan "Daftarkan Sidik Jari"
                ↓
-NestJS membuat perintah: { command: "ENROLL", student_id: X, slot: N }
+Route Handler tidak membuat antrean: face service di PC kelas langsung mengirim perintah serial `ENROLL:<slot>` via USB ke ESP32 (lihat `docs/fingerprint.md`).
                ↓
-ESP32 mengambil perintah saat polling berikutnya
+ESP32 menerima perintah serial seketika (tanpa polling)
                ↓
 Sensor R503 menyala, meminta jari ditempel 2 kali untuk pembuatan template
                ↓
 R503 menyimpan template di flash sensor internal
                ↓
-ESP32 mengirim laporan sukses ke NestJS beserta Slot ID
+ESP32 mengirim laporan sukses ke Route Handler beserta Slot ID
                ↓
-NestJS mencatat pemetaan student_id -> fingerprint_slot_id
+Route Handler mencatat pemetaan student_id -> fingerprint_slot_id
                ↓
-WebSocket mengirim event sukses ke Dashboard web
+Supabase Realtime mengirim perubahan ke Dashboard web
 ```
 
 #### 4. Aksi Pengguna
@@ -317,13 +315,9 @@ Pusat inventarisasi, pemantauan kesehatan konektivitas, dan diagnosis teknis unt
    - Status Konektivitas: `Online` (Heartbeat aktif) atau `Offline` (Melewati ambang batas tidak melapor).
    - Waktu Terakhir Terlihat (*Last Seen Timestamp*).
    - Versi Firmware / Versi Layanan.
-2. **Inspeksi Antrian Perintah (Command Queue Tracker)**:
-   - Tabel antrian perintah yang dikirim backend ke ESP32:
-     - `command_id`: Identitas unik transaksi perintah.
-     - Target `device_id`.
-     - Tipe Aksi: `VERIFY` atau `ENROLL`.
-     - Waktu Dibuat vs Waktu Diambil (*Polled*).
-     - Status Perintah: `QUEUED`, `PROCESSING`, `COMPLETED`, `EXPIRED`.
+2. **Inspeksi Status Serial Fingerprint (pengganti Command Queue Tracker)**:
+   - Status port COM yang dipakai face service (`COM5`/`/dev/ttyUSB0`), status koneksi serial (`connected`/`offline`), dan hasil VERIFY terakhir (`MATCH` slot + skor / `NO_MATCH` / `TIMEOUT` / `ERROR`).
+   - Sumber: log face service lokal — bukan tabel cloud. Tabel antrean lama (`device_commands`, `command_id`) sudah dihapus dari topologi utama dan tersimpan di `docs/archive/wifi-polling/` sebagai fallback bila kabel USB tidak sampai.
 3. **Log Kejadian Kesalahan Perangkat (Device Error Log)**:
    - Catatan anomali: kegagalan sensor R503 membaca template, kegagalan koneksi socket, atau lonjakan pembacaan HX711.
 
@@ -389,7 +383,7 @@ Pusat konfigurasi tata kelola parameter bisnis absensi, pengaturan ambang batas 
 - **Kebijakan Absensi Berulang (Duplicate Policy)**: Aturan sistem jika siswa memverifikasi diri dua kali dalam hari yang sama (opsi: "Abaikan verifikasi berikutnya" atau "Perbarui catatan waktu").
 
 ##### Tab 3: Pengaturan Perangkat & Sensor (Device & Sensor Config)
-- **Polling Interval ESP32 Fingerprint**: Interval waktu ESP32 menanyakan antrian ke NestJS (default: 2 detik).
+- **Polling Interval ESP32 Fingerprint**: Interval waktu ESP32 menanyakan antrian ke Route Handler Next.js (default: 2 detik).
 - **Threshold Offline Perangkat**: Batas waktu hening sebelum perangkat dinyatakan offline oleh sistem (default: 60 detik).
 - **Ambang Batas Beban Kursi (Load Cell Thresholds)**:
   - Bobot minimum terisi (`Occupied Threshold`): misal 15 kg.
@@ -402,7 +396,7 @@ Pusat konfigurasi tata kelola parameter bisnis absensi, pengaturan ambang batas 
 
 ##### Tab 5: Keamanan & Kredensial API (Security)
 - Manajemen Sesi Aktif: Daftar sesi browser staf yang sedang login dengan opsi putus paksa (*Revoke Session*).
-- Regenerasi Master API Key untuk komunikasi antar-layanan (NestJS <-> FastAPI Face PC).
+- Regenerasi Master API Key untuk komunikasi antar-layanan (Next.js Route Handlers <-> FastAPI Face PC, ESP32).
 
 #### 3. Logika & Proteksi Aksi Destruktif
 - Seluruh perubahan konfigurasi krusial (reset data, penghapusan akun, rotasi API key) wajib melalui **Dialog Konfirmasi Modal eksplisit**.
@@ -423,7 +417,7 @@ Sistem web memantau status absensi yang bergerak melalui mesin status (*state ma
      ↓
      ├── Tidak Cocok / Tidak Dikenali → [Status: Failed / Unknown]
      ↓
-[4. Sesi Dibuat di NestJS] → Dashboard menampilkan status: "Pending"
+[4. Sesi Dibuat di Route Handler Next.js] → Dashboard menampilkan status: "Pending"
      ↓
 [5. Perintah Polling Diambil ESP32] → Sensor R503 menyala berkedip
      ↓
@@ -437,75 +431,63 @@ Sistem web memantau status absensi yang bergerak melalui mesin status (*state ma
      ↓
 [7. Catatan Permanen Tersimpan di PostgreSQL]
      ↓
-[8. Event WebSocket "attendance.created" Disiarkan ke Web Dashboard]
+[8. Realtime `attendance` INSERT Disiarkan ke Web Dashboard via Supabase Realtime]
 ```
 
 ---
 
-## 6. Protokol Integrasi & Event WebSocket
+## 6. Protokol Integrasi & Event Supabase Realtime
 
-Dashboard web mendengarkan event WebSocket pada namespace `/ws/attendance`:
+Dashboard web berlangganan `postgres_changes` Supabase per tabel berikut (tanpa WebSocket namespace custom):
 
-### 1. Event: `attendance.created`
-Dipancarkan saat verifikasi 2 faktor sukses atau gagal secara permanen.
+### 1. Tabel `attendance` (INSERT/UPDATE)
+Dipicu saat verifikasi 2 faktor sukses atau gagal secara permanen. Payload kolom langsung:
 ```json
 {
-  "event": "attendance.created",
-  "data": {
-    "attendance_id": "uuid-v4",
-    "session_id": "sess-9921",
-    "student_id": "STD-2024-001",
-    "student_name": "Ahmad Rizky",
-    "class_id": "CLS-10-RPL-1",
-    "status": "Present",
-    "verification_time": "2026-10-17T07:12:45.120Z",
-    "face_confidence": 0.94,
-    "fingerprint_slot": 12
-  }
+  "attendance_id": "uuid-v4",
+  "session_id": "sess-9921",
+  "student_id": "STD-2024-001",
+  "student_name": "Ahmad Rizky",
+  "class_id": "CLS-10-RPL-1",
+  "status": "Present",
+  "verification_time": "2026-10-17T07:12:45.120Z",
+  "face_confidence": 0.94,
+  "fingerprint_slot": 12
 }
 ```
 
-### 2. Event: `attendance.updated`
-Dipancarkan untuk memperbarui progres sesi verifikasi yang sedang berlangsung.
+### 2. Tabel `attendance_sessions` (UPDATE)
+Dipicu untuk memperbarui progres sesi verifikasi yang sedang berlangsung.
 ```json
 {
-  "event": "attendance.updated",
-  "data": {
-    "session_id": "sess-9921",
-    "student_id": "STD-2024-001",
-    "step": "WAITING_FINGERPRINT",
-    "timeout_seconds_remaining": 22
-  }
+  "session_id": "sess-9921",
+  "student_id": "STD-2024-001",
+  "step": "WAITING_FINGERPRINT",
+  "timeout_seconds_remaining": 22
 }
 ```
 
-### 3. Event: `seat.status_changed`
-Dipancarkan saat status okupansi sensor beban berubah secara stabil.
+### 3. Tabel `seat_status` (UPDATE)
+Dipicu saat status okupansi sensor beban berubah secara stabil.
 ```json
 {
-  "event": "seat.status_changed",
-  "data": {
-    "seat_id": "SEAT-10-RPL-1-B03",
-    "class_id": "CLS-10-RPL-1",
-    "device_id": "ESP32-SEAT-01",
-    "status": "Occupied",
-    "weight_kg": 54.2,
-    "timestamp": "2026-10-17T07:13:01.000Z"
-  }
+  "seat_id": "SEAT-10-RPL-1-B03",
+  "class_id": "CLS-10-RPL-1",
+  "device_id": "ESP32-SEAT-01",
+  "status": "Occupied",
+  "weight_kg": 54.2,
+  "timestamp": "2026-10-17T07:13:01.000Z"
 }
 ```
 
-### 4. Event: `device.offline`
-Dipancarkan saat backend mendeteksi perangkat gagal mengirim heartbeat melewati batas threshold.
+### 4. Tabel `devices` (UPDATE offline)
+Dipicu saat Route Handler mendeteksi perangkat gagal mengirim heartbeat melewati batas threshold.
 ```json
 {
-  "event": "device.offline",
-  "data": {
-    "device_id": "ESP32-FP-01",
-    "device_name": "ESP32-Fingerprint-Kelas-10",
-    "last_seen": "2026-10-17T07:05:00.000Z",
-    "reason": "HEARTBEAT_TIMEOUT"
-  }
+  "device_id": "ESP32-FP-01",
+  "device_name": "ESP32-Fingerprint-Kelas-10",
+  "last_seen": "2026-10-17T07:05:00.000Z",
+  "reason": "HEARTBEAT_TIMEOUT"
 }
 ```
 
@@ -524,6 +506,6 @@ Antarmuka web wajib memiliki penanganan konsisten untuk 4 kondisi data dasar di 
    - Tangkap seluruh respon HTTP `4xx` dan `5xx`.
    - Sediakan tombol coba lagi (*Retry*) tanpa memaksa pengguna menyegarkan (*hard reload*) seluruh halaman browser.
 4. **State Koneksi Terdegradasi (Stale / Reconnecting State)**:
-   - Ketika koneksi WebSocket terputus, antarmuka tetap menampilkan data terakhir yang berhasil diterima dengan memberi label peringatan bahwa data belum diperbarui secara real-time.
-   - Klien browser wajib menjalankan algoritma *Exponential Backoff Reconnection*.
-   - Saat koneksi WebSocket berhasil tersambung kembali (*reconnected*), sistem otomatis memicu query REST latar belakang untuk mengambil perubahan data yang terlewat selama masa terputus.
+   - Ketika koneksi Realtime terputus, antarmuka tetap menampilkan data terakhir yang berhasil diterima dengan memberi label peringatan bahwa data belum diperbarui secara real-time.
+   - Klien browser mengandalkan auto-reconnect bawaan Supabase client.
+   - Saat koneksi Realtime berhasil tersambung kembali (*reconnected*), sistem otomatis memicu query REST latar belakang untuk mengambil perubahan data yang terlewat selama masa terputus.

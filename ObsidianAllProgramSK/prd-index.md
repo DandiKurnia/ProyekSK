@@ -16,11 +16,12 @@ Sistem antarmuka web terdiri dari halaman autentikasi + 7 menu utama yang diakse
 6. **Reports** (`/reports`) — Agregasi data historis absensi dan ekspor laporan.
 7. **Settings** (`/settings`) — Konfigurasi aturan sistem, ambang batas, kredensial perangkat, dan manajemen pengguna.
 
-Bagian header global menyediakan:
-- Indikator status konektivitas sistem pusat (koneksi NestJS & gateway WebSocket).
+- Indikator status konektivitas sistem pusat (koneksi Next.js API & Supabase Realtime).
 - Pemilih konteks kelas aktif (global filter).
 - Notifikasi sistem (peringatan perangkat offline atau anomali absensi).
 - Profil sesi pengguna aktif dan fungsi logout.
+
+> **Keputusan arsitektur (2026-10-20):** NestJS dihapus. Satu project Next.js full-stack (UI + Route Handlers) dengan Supabase (PostgreSQL + Auth + Realtime) sebagai backend. Tanpa WebSocket gateway custom.
 
 ## 2. Matriks Hak Akses Menu
 
@@ -38,20 +39,20 @@ Sistem menerapkan Role-Based Access Control (RBAC) dengan 3 peran pengguna. Scop
 
 ## 3. Integrasi Sistem & Penanganan Event Real-time
 
-Antarmuka web berkomunikasi dengan backend NestJS melalui dua kanal:
-1. **REST API (HTTPS)**: Digunakan untuk autentikasi sesi, query data awal, mutasi data (CRUD), dan pengambilan data historis terpaginasi.
-2. **WebSocket Gateway**: Menerima streaming event asinkron dari backend untuk pembaruan status tanpa refresh.
+Antarmuka web berjalan dalam satu project Next.js full-stack yang berkomunikasi dengan Supabase melalui dua kanal:
+1. **REST API (HTTPS)**: Route Handlers Next.js (`/api/*`) + Supabase PostgREST untuk autentikasi sesi, query data awal, mutasi data (CRUD), dan pengambilan data historis terpaginasi.
+2. **Supabase Realtime (postgres_changes)**: Langganan perubahan tabel `attendance`, `seat_status`, dan `devices` untuk pembaruan status tanpa refresh. Tanpa WebSocket gateway custom.
 
-Event WebSocket yang wajib ditangani oleh sistem web:
+Event Realtime (sumber tabel) yang wajib ditangani oleh sistem web:
 
-| Event | Payload Utama | Reaksi Sistem pada Antarmuka |
+| Event | Sumber Tabel | Reaksi Sistem pada Antarmuka |
 |---|---|---|
-| `attendance.created` | `attendance_id`, `student_id`, `class_id`, `status`, `timestamp` | Memperbarui counter kehadiran di Overview dan menyisipkan baris pada tabel Attendance. |
-| `attendance.updated` | `session_id`, `step`, `state` | Memperbarui status verifikasi yang sedang berjalan pada timeline inspeksi absensi. |
-| `seat.status_changed` | `seat_id`, `device_id`, `status`, `weight_kg`, `timestamp` | Memperbarui status okupansi kursi pada denah kelas dan ringkasan okupansi. |
-| `device.offline` | `device_id`, `last_seen`, `reason` | Mengubah indikator perangkat menjadi offline dan memicu notifikasi peringatan. |
+| `attendance` INSERT/UPDATE | `public.attendance` | Memperbarui counter kehadiran di Overview dan menyisipkan baris pada tabel Attendance. |
+| `attendance_sessions` UPDATE | `public.attendance_sessions` | Memperbarui status verifikasi yang sedang berjalan pada timeline inspeksi absensi. |
+| `seat_status` UPDATE | `public.seat_status` | Memperbarui status okupansi kursi pada denah kelas dan ringkasan okupansi. |
+| `devices` UPDATE | `public.devices` | Mengubah indikator perangkat menjadi offline dan memicu notifikasi peringatan. |
 
-Jika koneksi WebSocket terputus:
+Jika koneksi Realtime terputus:
 - Sistem menampilkan status koneksi terdegradasi.
 - Mekanisme auto-reconnect dijalankan secara berkala.
 - Setelah koneksi pulih, sistem melakukan sinkronisasi ulang state terkini melalui query REST API.

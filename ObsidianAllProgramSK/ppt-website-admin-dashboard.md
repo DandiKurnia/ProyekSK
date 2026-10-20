@@ -29,21 +29,20 @@ Logo tim + 2 badge highlight: "PRD Complete" dan "Design In Progress".
 
 **Isi / talking points:**
 
-- 5 komponen: Backend NestJS (otak pusat), Edge PC Face Recognition (FastAPI + YuNet/SFace), ESP32 Fingerprint (R503), ESP32 Seat Sensor (load cell + HX711), dan **Dashboard Web (fokus kami)**.
-- Website berkomunikasi dengan backend via 2 kanal: **REST HTTPS** (query &amp; mutasi data) dan **WebSocket** (update real-time).
-- Website **tidak** berkomunikasi langsung dengan perangkat — semua lewat backend NestJS.
+- 5 komponen: Backend Next.js full-stack + Supabase (otak pusat), Edge PC Face Recognition (FastAPI + YuNet/SFace), ESP32 Fingerprint via USB Serial ke laptop (R503), ESP32 Seat Sensor via Wi-Fi (load cell + HX711), dan **Dashboard Web (fokus kami)**.
+- Website berkomunikasi dengan cloud via 2 kanal: **REST HTTPS** (query & mutasi data) dan **Supabase Realtime** (update real-time, tanpa WebSocket gateway custom).
+- Website **tidak** berkomunikasi langsung dengan perangkat fingerprint — jalur serial USB hanya antara face service PC dan ESP32 (di luar browser).
 
-**VISUAL — TARUH LOGO TEKNOLOGI (bukan diagram kotak polos):**  
+**VISUAL — TARUH LOGO TEKNOLOGI (bukan diagram kotak polos):**
 Diagram arsitektur menggunakan **logo resmi setiap teknologi** agar mudah dikenali teman satu tim dan audiens:
 
-- Logo **NestJS** (kotak merah pivot) untuk backend pusat.
+- Logo **Next.js** untuk backend pusat + dashboard (satu project full-stack).
 - Logo **Python/FastAPI** untuk edge face recognition.
 - Logo **ESP32** (atau ikon chip) untuk 2 perangkat IoT.
-- Logo **PostgreSQL** (gajah biru) untuk database.
+- Logo **Supabase/PostgreSQL** (gajah biru) untuk database + Realtime.
 - Logo **React/Next.js** untuk dashboard web (fokus kami).
-- Logo **WebSocket** (atau ikon petir/plug) untuk kanal real-time.
 
-Susun kiri-ke-kanan: `ESP32 (logo) + ESP32 (logo) + FastAPI (logo) → NestJS (logo, tengah) → PostgreSQL (logo) di bawah NestJS; React (logo) di kanan, terhubung ke NestJS dengan 2 garis berlabel "REST" dan "WebSocket".`  
+Susun kiri-ke-kanan: `ESP32-FP (logo, via USB ke PC) + FastAPI (logo, PC kelas) + ESP32-Seat (logo, Wi-Fi) → Next.js + Supabase (logo, tengah, HTTPS + Realtime); React (logo) di kanan sebagai bagian project Next.js yang sama.`
 Sumber logo: unduh SVG resmi dari situs masing-masing teknologi (gratis, hindari screenshot blur).
 
 ---
@@ -72,8 +71,7 @@ Sumber logo: unduh SVG resmi dari situs masing-masing teknologi (gratis, hindari
 
 - **1 halaman login** (gerbang tunggal, route guard) sebelum masuk ke **7 menu internal**:
 Overview, Attendance, Students, Classes &amp; Seats, Device Monitoring, Reports, Settings.
-- Input: email/username + password → sesi terautentikasi via backend NestJS.
-- Aturan keamanan: pesan error generik (anti-enumerasi), lockout setelah 5x gagal dalam 15 menit, redirect otomatis saat sesi kadaluarsa.
+- Input: email/username + password → sesi terautentikasi via Supabase Auth / Route Handler Next.js.
 - Tanpa sesi valid: semua route internal diblokir → redirect ke login.
 
 **VISUAL — TARUH MOCKUP (WAJIB):**
@@ -88,10 +86,9 @@ Overview, Attendance, Students, Classes &amp; Seats, Device Monitoring, Reports,
 - 4 blok informasi:
   1. KPI kehadiran hari ini: Total / Present / **Late (dihitung terpisah)** / Absent + persentase kehadiran.
   2. Ringkasan okupansi kursi (Occupied / Empty / Unknown) + catatan "telemetri sensor, bukan absensi".
-  3. Log aktivitas verifikasi live (10–20 transaksi terakhir) via WebSocket.
+  3. Log aktivitas verifikasi live (10–20 transaksi terakhir) via Supabase Realtime.
   4. Kesehatan perangkat (Edge PC, ESP32 FP, ESP32 Seat) + last seen.
-- Update instan tanpa refresh: event `attendance.created`, `seat.status_changed`, `device.offline`.
-
+- Update instan tanpa refresh via Realtime: `attendance` (INSERT/UPDATE), `seat_status` (UPDATE), `devices` (UPDATE).
 **VISUAL — TARUH MOCKUP (WAJIB — MOCKUP UTAMA):**  
 **Mockup full-page Overview** — gambar desain 4 blok: baris KPI counter di atas, blok okupansi kursi + live feed di tengah, strip status perangkat di bawah. Saat presentasi, tunjuk tiap blok sambil jelaskan.
 
@@ -119,7 +116,7 @@ Overview, Attendance, Students, Classes &amp; Seats, Device Monitoring, Reports,
 **Isi / talking points:**
 
 - Klik satu transaksi → drawer detail audit berisi timeline kronologis:
-deteksi wajah (edge PC) → skor similarity SFace → perintah polling ke ESP32 → verifikasi R503 + slot template → keputusan NestJS → tersimpan di PostgreSQL.
+deteksi wajah (edge PC) → skor similarity SFace → perintah serial `VERIFY` via USB ke ESP32 → verifikasi R503 + slot template → validasi Route Handler Next.js → tersimpan di Supabase PostgreSQL.
 - Ini nilai jual teknis: **setiap keputusan absensi bisa diaudit sampai ke akar**.
 
 **VISUAL — TARUH MOCKUP (WAJIB):**  
@@ -168,12 +165,12 @@ deteksi wajah (edge PC) → skor similarity SFace → perintah polling ke ESP32 
 
 **Isi / talking points:**
 
-- Inventaris 3 tipe perangkat: Face Recognition PC, Fingerprint Scanner (ESP32+R503), Seat Occupancy Hub (ESP32+HX711) — status Online/Offline + last seen.
-- **Command Queue Tracker**: pantau perintah VERIFY/ENROLL yang dikirim ke ESP32 (`command_id`, status QUEUED→PROCESSING→COMPLETED/EXPIRED).
-- Log error perangkat + aksi Admin: uji perintah (ping), rotasi kredensial, bersihkan antrian macet.
+- Inventaris 3 tipe perangkat: Face Recognition PC, Fingerprint Scanner (ESP32+R503 via USB), Seat Occupancy Hub (ESP32+HX711 via Wi-Fi) — status Online/Offline + last seen.
+- **Status Serial / Fallback Tracker**: pantau koneksi COM port USB untuk fingerprint lokal; tabel command queue hanya aktif bila arsitektur memakai fallback Wi-Fi.
+- Log error perangkat + aksi Admin: uji koneksi, rotasi kredensial, tandai inspeksi fisik.
 
-**VISUAL — TARUH MOCKUP (WAJIB):**  
-**Mockup halaman Devices** — gambar desain: kartu daftar 3 perangkat dengan badge Online/Offline di atas, tabel command queue di bawah.
+**VISUAL — TARUH MOCKUP (WAJIB):**
+**Mockup halaman Devices** — gambar desain: kartu daftar 3 perangkat dengan badge Online/Offline di atas, strip status port USB/serial di bawah.
 
 ---
 
@@ -198,8 +195,7 @@ deteksi wajah (edge PC) → skor similarity SFace → perintah polling ke ESP32 
 
 **Isi / talking points:**
 
-- 5 tab: **General** (institusi, timezone, tahun ajaran) · **Attendance Rules** (jendela jam absensi, batas Late, timeout verifikasi, kebijakan duplikat) · **Device Config** (polling interval, threshold offline, ambang beban kursi) · **User Management** (CRUD staf, role, lockout protection) · **Security** (revoke sesi, regenerasi API key).
-- Aksi destruktif wajib dialog konfirmasi; fitur yang belum didukung backend tampil disabled berlabel "Planned".
+- 5 tab: **General** (institusi, timezone, tahun ajaran) · **Attendance Rules** (jendela jam absensi, batas Late, timeout verifikasi, kebijakan duplikat) · **Device Config** (threshold offline, ambang beban kursi) · **User Management** (CRUD staf, role, lockout protection) · **Security** (revoke sesi, regenerasi API key).
 
 **VISUAL — TARUH MOCKUP (WAJIB):**  
 **Mockup halaman Settings** — gambar desain dengan tab "Attendance Rules" aktif: form jam absensi, input batas Late, dropdown timeout, toggle kebijakan duplikat. 4 tab lain tampil sebagai tab header.
@@ -212,12 +208,11 @@ deteksi wajah (edge PC) → skor similarity SFace → perintah polling ke ESP32 
 
 **Isi / talking points:**
 
-- 4 state UI wajib di setiap komponen: **Loading**, **Empty**, **Error (retry)**, **Stale/Reconnecting** (exponential backoff + resinkronisasi REST saat WS pulih).
+- 4 state UI wajib di setiap komponen: **Loading**, **Empty**, **Error (retry)**, **Stale/Reconnecting** (exponential backoff + resinkronisasi REST saat Realtime pulih).
 - **Progres tim (khusus bagian website):**
-  - ✅ PRD sistem lengkap selesai (arsitektur, 8 halaman, event, exception).
+  - ✅ PRD sistem lengkap selesai (arsitektur 1-project Next.js + USB Serial, 8 halaman, event Realtime, exception).
   - 🔄 Design/mockup halaman — sedang dikerjakan (sebut % yang sudah jadi).
-  - ⏭️ Berikutnya: implementasi frontend (Next.js + React), integrasi REST &amp; WebSocket.
-- Tutup dengan pertanyaan/feedback dari penguji.
+  - ⏭️ Berikutnya: implementasi frontend (Next.js + Supabase), integrasi REST & Realtime.
 
 **VISUAL — TARUH MOCKUP (WAJIB):**  
 **4 mockup state UI dalam satu baris** (screenshot desain komponen yang sama dalam 4 keadaan: skeleton loading / empty state / error dengan tombol retry / banner reconnecting) + timeline progres tim di bawahnya (done / in progress / next).
@@ -230,7 +225,7 @@ deteksi wajah (edge PC) → skor similarity SFace → perintah polling ke ESP32 
 | Slide cadangan               | Isi                                                   | Trigger                     |
 | ---------------------------- | ----------------------------------------------------- | --------------------------- |
 | A1. Matriks RBAC lengkap     | Tabel 8×3 dari PRD §2 (dihapus dari urutan utama)     | Ditanya soal hak akses      |
-| A2. Event WebSocket          | 4 event + payload JSON dari PRD §6                    | Ditanya soal real-time      |
+| A2. Event Supabase Realtime  | Payload postgres_changes per tabel dari PRD §6        | Ditanya soal real-time      |
 | A3. State machine verifikasi | Diagram 8 langkah dari PRD §5                         | Ditanya alur absensi detail |
 | A4. Keamanan login           | Rate-limit, anti-enumeration, session handling        | Ditanya keamanan            |
 | A5. Aturan load cell         | Threshold 5/15 kg, histeresis 3 detik, kalibrasi tare | Ditanya sensor kursi        |
@@ -246,7 +241,7 @@ Legend: **[MOCKUP]** = taruh gambar design halaman website. **[LOGO]** = taruh l
 | Slide | Item visual yang harus disiapkan                                                                           |
 | ----- | ---------------------------------------------------------------------------------------------------------- |
 | 1     | \[LOGO\] Logo tim + 2 badge teks                                                                           |
-| 2     | \[LOGO\] Logo NestJS, FastAPI, ESP32, PostgreSQL, React/Next.js, WebSocket disusun jadi diagram arsitektur |
+| 2     | \[LOGO\] Logo Next.js, FastAPI, ESP32, Supabase/Postgres, React disusun jadi diagram arsitektur |
 | 3     | \[DIAGRAM\] 4 kartu scope + ikon peran                                                                     |
 | 4     | **\[MOCKUP\] Halaman login** — WAJIB                                                                       |
 | 5     | **\[MOCKUP\] Overview full-page (4 blok)** — WAJIB, mockup utama                                           |
@@ -254,7 +249,7 @@ Legend: **[MOCKUP]** = taruh gambar design halaman website. **[LOGO]** = taruh l
 | 7     | **\[MOCKUP\] Drawer timeline audit** — WAJIB                                                               |
 | 8     | **\[MOCKUP\] 2 modal enrollment (wajah &amp; fingerprint)** — WAJIB                                        |
 | 9     | **\[MOCKUP\] Seat map grid + panel detail** — WAJIB                                                        |
-| 10    | **\[MOCKUP\] Device list + command queue** — WAJIB                                                         |
+| 10    | **\[MOCKUP\] Device list + status serial port** — WAJIB                                                    |
 | 11    | **\[MOCKUP\] Reports: filter + tabel rekap** — WAJIB                                                       |
 | 12    | **\[MOCKUP\] Settings tab Attendance Rules** — WAJIB                                                       |
 | 13    | **\[MOCKUP\] 4 state UI sebaris + timeline progres** — WAJIB                                               |

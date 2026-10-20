@@ -1,45 +1,30 @@
-# Backend Pusat — NestJS
+# Backend Cloud — Route Handler Next.js + Supabase
 
-> **Rancangan** — semua endpoint di bawah adalah rancangan konseptual. Belum ada implementasi yang diverifikasi.
+> **Aktif (2026-10-20)** — cloud menerima **hasil final 2FA** dari face service lokal (wajah + jari sudah diputus di PC via USB Serial), lalu validasi aturan + simpan. Tanpa antrean perintah, tanpa `command_id`, tanpa WebSocket gateway custom. Versi lama (NestJS + polling) diarsipkan di [`archive/wifi-polling/backend.md`](archive/wifi-polling/backend.md).
 
 ## Tanggung Jawab dan Batas Integrasi
 
-NestJS adalah **satu-satunya otak keputusan** sistem:
+Route Handler Next.js + Supabase bertugas:
 
-- Menerima kandidat identitas wajah dari FastAPI lokal.
-- Mengatur perintah verifikasi fingerprint ke/dari ESP32.
-- Memvalidasi kecocokan identitas wajah vs fingerprint.
+- Menerima hasil final absensi dari face service lokal.
 - Memvalidasi jadwal, kelas, dan aturan absensi.
-- Menyimpan transaksi absensi secara konsisten ke PostgreSQL.
-- Mengautentikasi perangkat dan melayani dashboard (REST + WebSocket).
+- Menyimpan transaksi absensi secara konsisten ke Supabase PostgreSQL.
+- Mengautentikasi perangkat/pengguna dan melayani dashboard (REST + Realtime).
 
-**Batas:** NestJS tidak melakukan pemrosesan citra (itu tugas FastAPI), tidak membaca sensor langsung (itu tugas ESP32), dan tidak menentukan tampilan (itu tugas dashboard).
+**Batas:** cloud tidak melakukan pemrosesan citra (tugas face service), tidak mengendalikan sensor fingerprint (tugas face service via USB Serial), dan tidak menentukan tampilan (tugas dashboard).
 
 Dokumen terkait: [architecture.md](architecture.md), [face-recognition.md](face-recognition.md), [fingerprint.md](fingerprint.md), [database.md](database.md), [communication-flow.md](communication-flow.md).
 
-## Validasi Kandidat dari FastAPI
+## Validasi Hasil Final dari Face Service
 
-Saat menerima kandidat wajah, backend (rancangan):
+Saat menerima `POST /api/attendance`, Route Handler:
 
 1. Memverifikasi autentikasi perangkat (device ID + kredensial).
-2. Memvalidasi struktur payload dan nilai confidence.
-3. Memeriksa `student_id` ada di database dan terdaftar di kelas yang relevan.
-4. Memeriksa siswa belum tercatat absen (idempotensi).
-5. Jika lolos → membuat **sesi verifikasi** berstatus `awaiting_fingerprint` dengan batas waktu `TBD`.
-
-## Pengaturan Perintah dan Hasil ESP32
-
-- Backend menyimpan antrian perintah per perangkat; ESP32 mengambilnya lewat polling (rancangan awal, detail di [communication-flow.md](communication-flow.md)).
-- Setiap perintah memiliki `command_id` unik untuk idempotensi hasil.
-- Hasil dari ESP32 (matched / no_match / timeout / sensor_error) diterima backend, dicocokkan ke `command_id`, dan sesi verifikasi diperbarui.
-- Perintah yang tidak dijawab sampai batas waktu ditandai kedaluwarsa.
-
-## Validasi Identitas Ganda
-
-Aturan inti: **identitas dari template fingerprint harus sama dengan kandidat wajah** pada sesi verifikasi yang sama.
-
-- `template_id → student_id` (dari pemetaan di database) == `student_id` kandidat wajah → lanjut.
-- Berbeda / tidak cocok / timeout → sesi ditolak; kejadian dicatat untuk audit `TBD`.
+2. Memvalidasi struktur payload (`student_id`, `face_confidence`, `fingerprint_slot`, `fingerprint_score`).
+3. Memeriksa `student_id` ada dan terdaftar di kelas yang relevan.
+4. Memeriksa relasi `student_id ↔ fingerprint_slot` sesuai database (anti wajah-A-jari-B).
+5. Memeriksa siswa belum tercatat absen hari itu (idempotensi).
+6. Jika lolos → INSERT `attendance` + siarkan event Realtime.
 
 ## Validasi Jadwal, Kelas, dan Aturan Absensi
 
@@ -53,54 +38,51 @@ Rancangan aturan (nilai pasti `TBD`):
 
 ## Penyimpanan Transaksi Absensi
 
-- Insert ke tabel `Attendance` dalam satu transaksi database.
-- Pencegahan duplikat: constraint unik (siswa, sesi/kelas, tanggal) + pengecekan aplikasi — detail di [database.md](database.md).
-- Setelah tersimpan, backend menyiarkan event WebSocket `attendance.created` ke dashboard.
+- Insert ke tabel `attendance` dalam satu transaksi database.
+- Pencegahan duplikat: constraint unik `(student_id, class_id, date)` + pengecekan aplikasi — detail di [database.md](database.md).
+- Setelah tersimpan, Supabase menyiarkan `postgres_changes` (INSERT `attendance`) ke dashboard.
 
 ## Autentikasi Perangkat, Otorisasi, dan HTTPS
 
-- Semua komunikasi perangkat→backend memakai HTTPS; perangkat mengenali diri dengan `device_id` + kredensial (token/perangkat rahasia), bukan IP lokal.
-- Kredensial perangkat disimpan di firmware secara aman sebatas kemampuan ESP32 dan di backend dalam bentuk hash.
-- Endpoint terbagi per peran: perangkat (FastAPI & ESP32) hanya boleh memanggil endpoint perangkat; dashboard memakai autentikasi pengguna — skema detail `TBD`.
-- FastAPI lokal diperlakukan sebagai "perangkat" kelas dengan kredensialnya sendiri.
+- Semua face-service/ESP32-Kursi → cloud memakai HTTPS; perangkat mengenali diri dengan `device_id` + kredensial, bukan IP lokal.
+- Kredensial disimpan di backend dalam bentuk hash.
+- Endpoint terbagi per peran: perangkat hanya boleh endpoint perangkat; dashboard memakai Supabase Auth — skema detail `TBD`.
+- Face service diperlakukan sebagai "perangkat" kelas dengan kredensialnya sendiri.
 
 ## Endpoint Konseptual
 
-> **Rancangan — Belum diimplementasikan.** Nama path pasti `TBD`.
+> **Rancangan — Belum diimplementasikan.** Nama path final mengikuti App Router Next.js.
 
 | Grup | Method & Path (rancangan) | Fungsi |
 |---|---|---|
-| Face candidate | `POST /api/v1/face-candidates` | Menerima kandidat dari FastAPI |
-| Device commands | `GET /api/v1/devices/{device_id}/commands` | ESP32 mengambil perintah (polling) |
-| Device results | `POST /api/v1/devices/{device_id}/command-results` | ESP32 melaporkan hasil |
-| Seat status | `POST /api/v1/devices/{device_id}/seat-status` | ESP32 kursi melaporkan status |
-| Attendance | `GET /api/v1/attendance` | Daftar absensi (dashboard) |
-| Attendance | `POST /api/v1/attendance/manual` | Koreksi manual oleh operator — `TBD` |
-| Enrollment | `POST /api/v1/enrollments/fingerprint` | Memulai enrollment template |
-| WebSocket | `ws://…/events` | Event real-time ke dashboard |
+| Attendance | `POST /api/attendance` | Terima hasil final 2FA dari face service |
+| Attendance | `GET /api/attendance` | Daftar absensi (dashboard) |
+| Attendance | `POST /api/attendance/manual` | Koreksi manual operator — `TBD` |
+| Seat status | `POST /api/seats/status` | ESP32 kursi melaporkan status (Wi-Fi) |
+| Enrollment | `POST /api/students/{id}/face-status` | Callback status enrollment wajah |
+| Enrollment | `PATCH /api/students/{id}` | Update `fingerprint_slot` setelah enroll serial |
+| Realtime | Supabase channel | Event ke dashboard (tanpa WS custom) |
 
-### Contoh `POST /api/v1/face-candidates` → `202 Accepted`
+### Contoh `POST /api/attendance` (request dari face service)
 
 ```json
 {
-  "session_id": "ver-20261016-0091",
-  "status": "awaiting_fingerprint",
-  "expires_at": "2026-10-16T07:02:00+07:00"
+  "device_id": "class-pc-01",
+  "student_id": "STD-2024-001",
+  "face_confidence": 0.71,
+  "fingerprint_slot": 12,
+  "fingerprint_score": 180,
+  "captured_at": "2026-10-20T07:01:22+07:00"
 }
 ```
 
-### Contoh `GET .../commands` → `200 OK`
+### Contoh respons → `201 Created`
 
 ```json
 {
-  "commands": [
-    {
-      "command_id": "cmd-9f31",
-      "type": "fingerprint_verify",
-      "student_id": "S-2026-0042",
-      "created_at": "2026-10-16T07:01:25+07:00"
-    }
-  ]
+  "attendance_id": "a1b2c3d4-...",
+  "status": "present",
+  "date": "2026-10-20"
 }
 ```
 
@@ -108,42 +90,37 @@ Rancangan aturan (nilai pasti `TBD`):
 
 ```mermaid
 sequenceDiagram
-    participant F as FastAPI
-    participant B as NestJS
-    participant D as PostgreSQL
-    participant E as ESP32
+    participant F as Face Service (2FA lokal via USB)
+    participant B as Route Handler
+    participant D as Supabase
     participant W as Dashboard
-    F->>B: POST face-candidates (student_id)
-    B->>D: Cek siswa, aturan, duplikat
-    B->>D: INSERT verification session (awaiting_fingerprint)
-    B-->>F: 202 session_id, expires_at
-    E->>B: GET commands (polling)
-    B-->>E: command fingerprint_verify
-    E->>B: POST command-result (matched, template_id)
-    B->>B: template_id → student_id == kandidat?
-    alt Sesuai & aturan lolos
+    F->>B: POST /api/attendance (hasil final)
+    B->>D: Cek siswa, slot jari, aturan, duplikat
+    alt Lolos
         B->>D: INSERT attendance (transaksi)
-        B->>W: WS event attendance.created
-    else Tidak sesuai / gagal
-        B->>D: UPDATE session (rejected/expired)
+        D-->>W: Realtime INSERT attendance
+    else Ditolak
+        B-->>F: 4xx (duplikat / slot tak cocok / di luar jadwal)
     end
 ```
 
 ## Idempotensi, Retry, dan Penanganan Kegagalan
 
-| Aspek | Rancangan |
+| Aspek | Penanganan |
 |---|---|
-| Kandidat wajah terkirim ganda (retry FastAPI) | Backend menerima ulang; jika sesi masih `awaiting_fingerprint`, perbarui saja — tidak membuat sesi baru duplikat |
-| Hasil ESP32 terkirim ganda | Deduplikasi berdasar `command_id` |
-| Absensi duplikat | Ditolak constraint unik DB + cek aplikasi |
-| Retry perangkat | Exponential backoff dengan jitter; `TBD` interval awal |
-| Sesi kedaluwarsa | Sesi `awaiting_fingerprint` melewati `expires_at` ditandai `expired` |
-| Internet terputus | Perangkat menyimpan hasil terakhir sementara (buffer terbatas) dan kirim ulang saat online — `TBD` |
-| Layanan backend down | Perangkat retry; dashboard menampilkan banner error |
+| Hasil final terkirim ganda (retry) | Ditolak constraint unik DB + cek aplikasi — tanpa sesi ganda |
+| Absensi duplikat | Ditolak constraint unik `(student_id, class_id, date)` |
+| Wajah ≠ jari (slot tak cocok) | Ditolak 422 + log audit |
+| Retry perangkat | Exponential backoff dengan jitter |
+| Internet terputus | Face service buffer lokal terbatas, kirim ulang saat online |
+| Layanan backend down | Face service retry; dashboard banner error |
 
-## Integrasi WebSocket dengan Dashboard
+## Integrasi Realtime dengan Dashboard
 
-- Backend menyiarkan event: `attendance.created`, `attendance.updated`, `seat.status_changed`, `device.offline` — daftar final `TBD`.
-- Dashboard berlangganan channel berdasar kelas/hak akses pengguna.
-- Format pesan: JSON dengan `type`, `payload`, `timestamp` (contoh di [dashboard.md](dashboard.md)).
-- Reconnect otomatis di sisi klien; data yang terlewat saat putus diambil ulang via REST.
+- Supabase menyiarkan: INSERT/UPDATE `attendance`, UPDATE `seat_status`, UPDATE `devices`.
+- Dashboard berlangganan channel per kelas/hak akses.
+- Reconnect otomatis di sisi klien; data terlewat diambil ulang via REST.
+
+## Fallback Wi-Fi Polling (Arsip)
+
+Spesifikasi antrean perintah (`device_commands`, `command_id`, polling ESP32) tersimpan di [`archive/wifi-polling/backend.md`](archive/wifi-polling/backend.md) untuk skenario kabel USB tidak sampai.

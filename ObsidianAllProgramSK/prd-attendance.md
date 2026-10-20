@@ -24,26 +24,25 @@ Pusat manajemen catatan absensi yang menyimpan seluruh history verifikasi biomet
 3. **Timeline Verifikasi per Sesi** (detail inspeksi):
    - Step 1: Face Detected (layanan lokal FastAPI).
    - Step 2: Candidate Identified (student ID + confidence).
-   - Step 3: Fingerprint Requested (perintah dikirim ke ESP32).
-   - Step 4: Fingerprint Verified (`matched` via R503).
-   - Step 5: Saving Attendance (backend menyimpan ke PostgreSQL).
+   - Step 3: Fingerprint Requested (perintah serial `VERIFY` via USB ke ESP32, milidetik).
+   - Step 4: Fingerprint Verified (`MATCH` slot + skor via R503).
+   - Step 5: Saving Attendance (Route Handler `POST /api/attendance` menyimpan hasil final 2FA ke Supabase).
    - Step 6: Status Final (`Present` / `Late` / `Failed` / `Expired`).
-   - Tiap step memiliki timestamp, `session_id`, dan `command_id` terkait.
+   - Tiap step memiliki timestamp; `session_id` terisi hanya pada fallback Wi-Fi (`NULL` pada insert langsung USB).
 
 4. **Summary Counters**:
    - Total present, late, absent, pending, failed, expired dalam rentang filter.
 
 ## 3. Sumber Data & Aliran Event
-
-- Query REST API paginasi untuk data historis dengan filter kombinasi: rentang tanggal, kelas, status, pencarian nama/student ID, urutan kolom.
-- Event WebSocket `attendance.created` menambahkan baris baru; `attendance.updated` memperbarui status pada sesi berjalan.
-- Detail timeline verifikasi diambil via REST endpoint sesi per `session_id`.
+- Query REST API Route Handler (`GET /api/attendance?...`) paginasi untuk data historis dengan filter kombinasi: rentang tanggal, kelas, status, pencarian nama/student ID, urutan kolom.
+- Realtime `attendance` INSERT/UPDATE menambahkan baris baru; tanpa sesi cloud pada topologi USB (tabel `attendance_sessions` hanya aktif pada fallback Wi-Fi).
+- Detail timeline verifikasi diambil via `GET /api/attendance/sessions/{session_id}`.
 
 ## 4. Aturan Logika Sistem
 
-1. Status `Present`/`Late` hanya ditampilkan setelah konfirmasi backend bahwa record tersimpan.
-2. Backend tidak mengembalikan citra wajah atau template fingerprint; hanya confidence score numerik dan hasil kecocokan.
-3. Aksi koreksi manual hanya tersedia untuk role Admin (flag `TBD` di arsitektur backend).
+1. Status `Present`/`Late` hanya ditampilkan setelah Route Handler mengonfirmasi record tersimpan di Supabase.
+2. Route Handler tidak mengembalikan citra wajah atau template fingerprint; hanya confidence score numerik dan hasil kecocokan.
+3. Aksi koreksi manual hanya tersedia untuk role Admin (flag `TBD` di arsitektur Supabase RLS).
 4. Filter tanggal, kelas, dan status bekerja sebagai kombinasi AND; perubahan filter reset pagination.
 
 ## 5. Aksi Pengguna

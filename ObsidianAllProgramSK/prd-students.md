@@ -22,31 +22,29 @@ Manajemen data induk siswa dan orkestrasi enrollment biometrik dua faktor. Menu 
    - Step 5: Tersimpan & status `Enrolled`.
    - Tiap step memiliki status (`pending`, `running`, `success`, `failed`) dan pesan kegagalan bila ada.
 
-4. **Workflow Enrollment Fingerprint** (sesuai `docs/fingerprint.md`):
-   - Step 1: Backend membuat perintah enrollment (diambil ESP32 via polling).
+   - Step 1: Face service PC kelas langsung mengirim perintah serial `ENROLL:<slot>` via USB ke ESP32 (tanpa antrean cloud).
    - Step 2: ESP32 meminta siswa menempelkan jari di R503 (1–2x).
-   - Step 3: Sensor membentuk template & mengembalikan `template_id`.
-   - Step 4: Backend menyimpan relasi `student_id ↔ template_id`.
-   - Status perintah live: `sent` → `picked_up` → `waiting_finger` → `matched/template_created` → `mapped`, atau `timeout` / `error`.
-   - Countdown timeout sesi enrollment.
+   - Step 3: Sensor membentuk template di slot numerik & mengembalikan `ENROLLED:<slot>`.
+   - Step 4: Face service memperbarui `fingerprint_slot` siswa via Route Handler (`PATCH /api/students/{id}`).
+   - Status live: countdown timeout sesi enrollment; atau `timeout` / `error` bila serial gagal.
 
 5. **Riwayat Kehadiran per Siswa**:
    - Daftar record absensi historis: tanggal, check-in, status final (`Present`/`Late`/`Absent`/`Failed`).
 
 ## 3. Sumber Data & Aliran Event
 
-- CRUD siswa via REST API.
-- Trigger enrollment wajah: upload data → layanan FastAPI lokal → callback status.
-- Trigger enrollment fingerprint: backend membuat perintah; status diambil via polling REST atau event WebSocket.
-- Riwayat kehadiran diambil via REST endpoint paginasi.
+- CRUD siswa via Route Handler Next.js (`/api/students`) di atas Supabase.
+- Trigger enrollment wajah: upload data → layanan FastAPI lokal (`POST http://localhost:8000/enroll`) → callback status via `POST /api/students/{id}/face-status`.
+- Trigger enrollment fingerprint: face service PC kirim perintah serial USB langsung; status dilaporkan ke cloud via Route Handler.
+- Riwayat kehadiran diambil via Route Handler paginasi (`GET /api/students/{id}/attendance`).
 
 ## 4. Aturan Logika Sistem
 
-1. Student ID wajib unik; duplikasi ditolak backend.
+1. Student ID wajib unik; duplikasi ditolak Route Handler (unique constraint Supabase).
 2. Siswa baru otomatis berstatus enrollment `Incomplete`.
 3. Re-enrollment menimpa data lama; penghapusan data biometrik memerlukan konfirmasi eksplisit (perubahan bersifat destruktif).
 4. Enrollment hanya dapat dimulai oleh Admin atau Teacher dengan konfirmasi; Observer read-only.
-5. Backend tidak pernah mengembalikan citra wajah atau template fingerprint ke antarmuka.
+5. Route Handler tidak pernah mengembalikan citra wajah atau template fingerprint ke antarmuka.
 
 ## 5. Aksi Pengguna
 
