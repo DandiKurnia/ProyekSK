@@ -1,1 +1,7 @@
 prompt.md
+*.npz
+__pycache__/
+*.pyc
+*.onnx
+.env
+.env.local
