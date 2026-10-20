@@ -5,3 +5,15 @@ __pycache__/
 *.onnx
 .env
 .env.local
+node_modules/
+.next/
+out/
+dist/
+.agents/
+.claude/
+**/.agents/
+**/.claude/
+*.tsbuildinfo
+**/*.tsbuildinfo
+skills-lock.json
+**/skills-lock.json

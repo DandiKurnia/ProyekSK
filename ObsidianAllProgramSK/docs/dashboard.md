@@ -91,3 +91,13 @@ Contoh payload Realtime `attendance` INSERT (kolom langsung, bukan pesan WS cust
 - Peran kandidat: admin (semua kelas + pengelolaan), guru/operator (kelas yang diampu), pengamat (read-only) — final `TBD`.
 - Dashboard tidak boleh dapat mengakses/mengunduh data biometrik mentah.
 - Semua permintaan dashboard ke backend melewati otorisasi berbasis peran di sisi backend.
+
+## Status Implementasi UI (2026-10-20, update malam)
+
+- **Overview live:** `page.tsx` container fetch `GET /api/dashboard/overview-summary?class_id&date` + subscribe Realtime `attendance`/`seat_status`/`devices` (refetch ringan). Komponen (`KpiCards`, `DetailCards`, `Topbar`) presentasional terima props.
+- **Route Handler:** `src/app/api/dashboard/overview-summary/route.ts` agregasi server-side via service-role (aman, secret tidak ke browser): total/present/late/absent (absent = turunan tanpa baris), bucket kursi occupied/empty/unknown, device + flag `stale` (> `device_offline_seconds`), recent 10.
+ - **Verifikasi:** `tsc --noEmit` bersih ✅; `npm run build` sukses (`/` 72.1 kB, route API dynamic) ✅; serve prod :3105 → API return `XII-RPL-1, total 2, absent 2, seats 2 empty, device offline/stale` ✅.
+ - **Attendance (2026-10-21 dini hari):** `src/app/attendance/page.tsx` replika `design/Attendance.png` — tabel 2FA (`sess-9921` dkk) + modal inspeksi pipeline 6-langkah (YuNet→SFace→Serial ESP32→R503→Supabase commit→final), filter/search/export-CSV client-side, pagination 1-dari-24, fallback mock jika Supabase kosong. Route `GET /api/attendance?class_id&date&search&page&limit` via service-role. Topbar terima `pageTitle` (`Overview` di `/`, `Attendance` di `/attendance`). Mobile (<md) daftar kartu, desktop tabel. Bukti: desk+mobile screenshot + modal OK ✅.
+ - **Camera Kiosk Station (`/camera`):** halaman mandiri khusus siswa di kelas, 1 kolom tengah penuh (`max-w-3xl`) tanpa sidebar/menu admin. Tampilan light theme bersih selaras dashboard. Menghilangkan card teknis internal (alur pipeline/PRD §5) dan badge internal. Menjalankan auto-scan (1.8s) / manual, feedback match/unrecognized/ambigu + instruksi 2FA step 2 sensor R503.
+ - **Face Enrollment Staf (`/students/enroll`):** halaman admin di bawah Sidebar menu `Students`. Form pendaftaran NIS/nama + panduan 5 sampel sudut wajah (lurus, kiri, kanan, mundur, netral) yang dirata-ratakan jadi 1 embedding stabil. Dilayani oleh `POST /api/face/enroll` yang memanggil `:8200/enroll`.
+ - **Sisa:** halaman `Classes&Seats`/`Devices`/`Reports`/`Settings` belum ada; CRUD tabel data induk `Students` (list/edit/delete); auth/RBAC (`middleware.ts`) belum ada; RLS masih off; Realtime Replication di dashboard Supabase perlu diaktifkan.

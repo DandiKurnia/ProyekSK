@@ -1,0 +1,7 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  @apply bg-aici-canvas text-aici-dark font-sans antialiased;
+}

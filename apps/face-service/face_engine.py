@@ -18,6 +18,7 @@ SFACE_PATH = os.path.join(BASE_DIR, "models", "face_recognition_sface_2021dec.on
 DB_PATH = os.path.join(BASE_DIR, "embeddings_yunet.npz")
 
 THRESHOLD = 0.40
+MARGIN = 0.08
 DET_WIDTH = 240  # makin kecil makin cepat; 240 cukup utk jarak <2 m
 
 MODEL_VERSIONS = {
@@ -92,16 +93,23 @@ def enroll_embedding(db, name, emb):
     return db
 
 
-def recognize(emb, db, threshold=THRESHOLD):
-    """Kembalikan (nama|None, skor_terbaik)."""
-    best_name, best_score = None, -1.0
-    for name, ref in db.items():
-        score = cosine(emb, ref)
-        if score > best_score:
-            best_name, best_score = name, score
-    if best_score >= threshold:
-        return best_name, best_score
-    return None, best_score
+def recognize(emb, db, threshold=THRESHOLD, margin=MARGIN):
+    """Kembalikan (nama|None, skor terbaik).
+
+    Lolos bila: skor >= threshold DAN (bila DB >1 wajah) selisih ke skor
+    kedua >= margin. Mencegah wajah asing yg mirip dua orang sekaligus
+    langsung menempel ke salah satunya.
+    """
+    scores = [(name, cosine(emb, ref)) for name, ref in db.items()]
+    if not scores:
+        return None, -1.0
+    scores.sort(key=lambda s: s[1], reverse=True)
+    best_name, best_score = scores[0]
+    if best_score < threshold:
+        return None, best_score
+    if len(scores) > 1 and (best_score - scores[1][1]) < margin:
+        return None, best_score
+    return best_name, best_score
 
 
 def delete_student(db, student_id):

@@ -1,10 +1,10 @@
 """FastAPI local service untuk face recognition (YuNet + SFace).
 
-Jalan di komputer kelas lokal (port 8000). Hanya diakses localhost/LAN kelas.
+Jalan di komputer kelas lokal (port 8200). Hanya diakses localhost/LAN kelas.
 Contract PRD: ObsidianAllProgramSK/docs/face-recognition.md
 
 Jalankan:
-  uvicorn server:app --app-dir apps/face-service --host 127.0.0.1 --port 8000
+  uvicorn server:app --app-dir apps/face-service --host 127.0.0.1 --port 8200
 """
 
 import base64
@@ -70,6 +70,10 @@ class RecognizeRequest(BaseModel):
         default=fe.THRESHOLD,
         description="Ambang batas cosine similarity (default 0.40)",
     )
+    margin: Optional[float] = Field(
+        default=fe.MARGIN,
+        description="Selisih minimal skor juara 1 vs juara 2 (default 0.08)",
+    )
 
 
 class RecognizeResponse(BaseModel):
@@ -122,7 +126,10 @@ def recognize(req: RecognizeRequest):
 
     face = fe.biggest(faces)
     emb = fe.embed(img, face)
-    name, score = fe.recognize(emb, db, threshold=req.min_confidence)
+    margin_val = req.margin if req.margin is not None else fe.MARGIN
+    name, score = fe.recognize(
+        emb, db, threshold=req.min_confidence, margin=margin_val
+    )
 
     if name is not None:
         return {
@@ -133,13 +140,14 @@ def recognize(req: RecognizeRequest):
             "threshold_used": req.min_confidence,
             "reason": None,
         }
+    reason = "below_threshold" if score < req.min_confidence else "ambiguous"
     return {
         "faces_detected": len(faces),
         "match": False,
         "student_id": None,
         "confidence": round(score, 4) if score >= 0 else 0.0,
         "threshold_used": req.min_confidence,
-        "reason": "below_threshold",
+        "reason": reason,
     }
 
 

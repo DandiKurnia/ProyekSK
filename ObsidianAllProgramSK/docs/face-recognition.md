@@ -13,9 +13,7 @@ Dokumen terkait: [architecture.md](architecture.md), [backend.md](backend.md), [
 | Keputusan | Pilihan | Bukti uji |
 |---|---|---|
 | Pola inferensi | **YuNet tiap frame, SFace on-demand 1x** | InsightFace `FaceAnalysis` (4 model/frame @640px) patah-patah; SFace tiap 20 frame masih spike lag tiap bounding box muncul; SFace on-demand → feed mulus |
-| Deteksi live | YuNet `2023mar` @ lebar 240px | Kotak stabil, 5–15 ms/frame di CPU |
-| Verifikasi | SFace `2021dec`, cosine, threshold awal `0.40` | Kalibrasi genuine vs impostor menyusul |
-| Bahasa/dependensi | `opencv-contrib-python` + `numpy` saja | Tanpa `onnxruntime`/`insightface`/`FastAPI` untuk tahap uji |
+| Verifikasi | SFace `2021dec`, cosine, threshold `0.40` + margin rank1-rank2 `0.08` | uji 2026-10-21: genuine=1.0 lolos, acak=0.02 ditolak, midpoint ambigu=0.72 ditolak |
 | Penyimpanan | `embeddings.npz` lokal PC kelas | Restart-safe (dibuktikan: DB terbaca ulang); tanpa foto, tanpa cloud |
 
 Yang ditolak: `face_recognition`/dlib (build C++ gagal di Windows), MediaPipe (API asing, selisih hemat kecil), DeepFace (>1 GB).

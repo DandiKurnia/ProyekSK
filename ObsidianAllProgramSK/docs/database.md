@@ -226,7 +226,9 @@ erDiagram
     DEVICES ||--o| DEVICE_CREDENTIALS : "kredensial"
 ```
 
-## DDL Acuan (Supabase SQL Editor)
+## DDL Acuan (Supabase SQL Editor) — Setup USB Serial
+
+> **Setup utama: jalankan §1–§5, §8–§13 saja. SKIP §6 (`device_commands`) + §7 (`attendance_sessions`)** — fallback Wi-Fi only. §7 gagal bila dijalankan tanpa §6 karena FK `fingerprint_command_id → device_commands` (error `42P01` yang kamu alami). §8 di bawah sudah tanpa kolom `session_id` agar tidak tergantung tabel parent yang di-skip.
 
 ```sql
 -- Ekstensi untuk UUID
@@ -295,44 +297,44 @@ create table public.devices (
 );
 create index devices_status_idx on public.devices (status);
 
--- 6. Device commands
-create table public.device_commands (
-  command_id   uuid primary key default gen_random_uuid(),
-  device_id    text not null references public.devices (device_id),
-  type         text not null check (type in ('verify', 'enroll', 'test')),
-  student_id   text references public.students (student_id),
-  status       text not null default 'queued'
-               check (status in ('queued', 'picked_up', 'awaiting_result', 'completed', 'expired')),
-  payload      jsonb,
-  result       jsonb,
-  created_at   timestamptz not null default now(),
-  picked_up_at timestamptz,
-  completed_at timestamptz
-);
-create index device_commands_poll_idx
-  on public.device_commands (device_id, status);
+-- 6. Device commands — FALLBACK Wi-Fi ONLY, JANGAN RUN di setup utama
+-- (Butuh bila kabel USB tak sampai. Hapus prefix "-- " bila dipakai.)
+-- create table public.device_commands (
+--   command_id   uuid primary key default gen_random_uuid(),
+--   device_id    text not null references public.devices (device_id),
+--   type         text not null check (type in ('verify', 'enroll', 'test')),
+--   student_id   text references public.students (student_id),
+--   status       text not null default 'queued'
+--                check (status in ('queued', 'picked_up', 'awaiting_result', 'completed', 'expired')),
+--   payload      jsonb,
+--   result       jsonb,
+--   created_at   timestamptz not null default now(),
+--   picked_up_at timestamptz,
+--   completed_at timestamptz
+-- );
+-- create index device_commands_poll_idx
+--   on public.device_commands (device_id, status);
+--
+-- 7. Attendance sessions — FALLBACK Wi-Fi ONLY, JANGAN RUN di setup utama
+-- create table public.attendance_sessions (
+--   session_id             text primary key,
+--   student_id             text not null references public.students (student_id),
+--   class_id               text not null references public.classes (class_id),
+--   face_confidence        real,
+--   fingerprint_command_id uuid references public.device_commands (command_id),
+--   step                   text not null
+--                          check (step in ('face_detected', 'waiting_fingerprint',
+--                                          'verified', 'failed', 'expired')),
+--   expires_at             timestamptz not null,
+--   created_at             timestamptz not null default now(),
+--   updated_at             timestamptz not null default now()
+-- );
+-- create index attendance_sessions_step_exp_idx
+--   on public.attendance_sessions (step, expires_at);
 
--- 7. Attendance sessions
-create table public.attendance_sessions (
-  session_id             text primary key,
-  student_id             text not null references public.students (student_id),
-  class_id               text not null references public.classes (class_id),
-  face_confidence        real,
-  fingerprint_command_id uuid references public.device_commands (command_id),
-  step                   text not null
-                         check (step in ('face_detected', 'waiting_fingerprint',
-                                         'verified', 'failed', 'expired')),
-  expires_at             timestamptz not null,
-  created_at             timestamptz not null default now(),
-  updated_at             timestamptz not null default now()
-);
-create index attendance_sessions_step_exp_idx
-  on public.attendance_sessions (step, expires_at);
-
--- 8. Attendance
+-- 8. Attendance (tanpa session_id — insert langsung 2FA lokal)
 create table public.attendance (
   attendance_id    uuid primary key default gen_random_uuid(),
-  session_id       text unique references public.attendance_sessions (session_id),
   student_id       text not null references public.students (student_id),
   class_id         text not null references public.classes (class_id),
   date             date not null,
@@ -400,7 +402,7 @@ create table public.app_config (
 Aktifkan publikasi Realtime hanya untuk tabel yang dibaca live oleh UI:
 
 - `attendance` (INSERT, UPDATE) — counter + tabel Attendance, log Overview
-- `attendance_sessions` (UPDATE) — timeline sesi berjalan
+- ~~`attendance_sessions` (UPDATE) — timeline sesi berjalan~~ — FALLBACK Wi-Fi only, skip di setup utama.
 - `seat_status` (UPDATE) — denah kursi + ringkasan okupansi
 - `devices` (UPDATE) — indikator offline + notifikasi
 
@@ -409,9 +411,8 @@ Tabel lain (`students`, `reports` via query, `app_config`) cukup via REST.
 ## Pencegahan Absensi Duplikat
 
 1. **Constraint unik** `(student_id, class_id, date)` di `attendance` — penjaga terakhir, menang atas race condition.
-2. **Unique `session_id`** — 1 sesi verifikasi maksimal 1 record.
-3. **Cek aplikasi** di Route Handler sebelum insert (pesan error ramah).
-4. **Idempotensi `command_id`** — hasil ESP32 yang dikirim ulang tidak tercatat dua kali.
+- ~~2. Unique `session_id` — 1 sesi verifikasi maksimal 1 record.~~ — Fallback Wi-Fi only; setup utama memakai constraint unik §8.
+- ~~4. Idempotensi `command_id` — hasil ESP32 yang dikirim ulang tidak tercatat dua kali.~~ — Fallback Wi-Fi only.
 
 ## Privasi dan Keamanan Data
 
@@ -427,3 +428,4 @@ Tabel lain (`students`, `reports` via query, `app_config`) cukup via REST.
 - Setelah tabel jadi: aktifkan RLS + buat policy per role (admin full, teacher per `teacher_class_assignments`, observer read-only) — DDL policy `TBD` menyusul.
 - Nilai awal `app_config` yang wajib di-seed: `attendance_window`, `late_threshold`, `verification_timeout` (30 dtk), `seat_occupied_kg` (15 kg), `seat_hysteresis_seconds` (3 dtk), `device_offline_seconds` (60 dtk), `timezone` (`Asia/Jakarta`).
 - Estimasi ukuran: 100 siswa + 1 tahun absen harian (~20 ribu baris) jauh di bawah 500 MB free tier.
+- **Status live (2026-10-20):** Project `crflhxkaqqsrywqtfjef` seeded — `classes` 1, `students` 2, `devices` 1, `seats` 2 + `seat_status` 2, `app_config` 7 keys, `attendance` 0. RLS **dimatikan sementara** per tabel (publishable key return 0 sebelum dimatikan); aktifkan + policy per role setelah UI stabil. Realtime `attendance`/`seat_status`/`devices` TBD via Database → Replication.

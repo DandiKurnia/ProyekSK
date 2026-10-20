@@ -34,7 +34,7 @@ Manajemen data induk siswa dan orkestrasi enrollment biometrik dua faktor. Menu 
 ## 3. Sumber Data & Aliran Event
 
 - CRUD siswa via Route Handler Next.js (`/api/students`) di atas Supabase.
-- Trigger enrollment wajah: upload data → layanan FastAPI lokal (`POST http://localhost:8000/enroll`) → callback status via `POST /api/students/{id}/face-status`.
+- Trigger enrollment wajah: upload data → layanan FastAPI lokal (`POST http://localhost:8200/enroll`) → callback status via `POST /api/students/{id}/face-status`.
 - Trigger enrollment fingerprint: face service PC kirim perintah serial USB langsung; status dilaporkan ke cloud via Route Handler.
 - Riwayat kehadiran diambil via Route Handler paginasi (`GET /api/students/{id}/attendance`).
 
