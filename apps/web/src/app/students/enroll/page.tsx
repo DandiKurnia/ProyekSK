@@ -41,6 +41,35 @@ export default function StudentFaceEnrollPage() {
 
   const [studentId, setStudentId] = useState("");
   const [fullName, setFullName] = useState("");
+  const [candidates, setCandidates] = useState<Array<{ student_id: string; full_name: string; face_status: string }>>([]);
+  const [loadingCandidates, setLoadingCandidates] = useState(true);
+  // Kandidat dari Supabase + pre-fill dari tabel: /students/enroll?student_id=S001&name=Ahmad
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const sid = params.get("student_id");
+    const nm = params.get("name");
+    if (sid) setStudentId(sid);
+    if (nm) setFullName(nm);
+    (async () => {
+      try {
+        const res = await fetch("/api/students");
+        if (res.ok) {
+          const data = await res.json();
+          const list = (data.students ?? []) as Array<{ student_id: string; full_name: string; face_status: string }>;
+          setCandidates(list);
+          // Jika pre-fill cocok dengan kandidat, sinkronkan nama otomatis
+          if (sid && !nm) {
+            const match = list.find((c) => c.student_id === sid);
+            if (match) setFullName(match.full_name);
+          }
+        }
+      } catch {
+        // Fallback: ketik manual tetap bisa dipakai
+      } finally {
+        setLoadingCandidates(false);
+      }
+    })();
+  }, []);
 
   const [samples, setSamples] = useState<{ [slot: number]: string }>({});
   const [submitting, setSubmitting] = useState(false);
@@ -183,7 +212,7 @@ export default function StudentFaceEnrollPage() {
       }
       setFeedback({
         type: "success",
-        message: `Wajah ${cleanId} berhasil didaftarkan! (${data.samples_used ?? sampleList.length} sampel diproses, total database: ${data.total_registered ?? "?"} wajah).`,
+        message: `Wajah ${cleanId} berhasil didaftarkan & status Supabase disinkronkan! (${data.samples_used ?? sampleList.length} sampel diproses, total database: ${data.total_registered ?? "?"} wajah).`,
       });
       // Reset form
       setSamples({});
@@ -222,7 +251,7 @@ export default function StudentFaceEnrollPage() {
           <div className="flex flex-wrap items-center justify-between gap-3 bg-aici-surface p-4 rounded-2xl border border-aici-border/60 shadow-sm">
             <div className="flex items-center gap-3">
               <Link
-                href="/attendance"
+                href="/students"
                 className="p-2 rounded-xl border border-aici-border hover:bg-aici-surface-nested text-aici-muted hover:text-aici-dark transition-colors"
                 title="Kembali ke Dashboard"
               >
@@ -413,6 +442,32 @@ export default function StudentFaceEnrollPage() {
                 </div>
 
                 <div className="space-y-3">
+                  <div>
+                    <label className="block text-xs font-semibold text-aici-dark mb-1">
+                      Pilih Siswa (dari Database)
+                    </label>
+                    <select
+                      value={candidates.some((c) => c.student_id === studentId) ? studentId : ""}
+                      disabled={loadingCandidates || candidates.length === 0}
+                      onChange={(e) => {
+                        const picked = candidates.find((c) => c.student_id === e.target.value);
+                        if (picked) {
+                          setStudentId(picked.student_id);
+                          setFullName(picked.full_name);
+                        }
+                      }}
+                      className="w-full px-3 py-2 bg-aici-surface border border-aici-border rounded-xl text-xs font-medium text-aici-dark outline-none focus:border-aici-dark transition-colors disabled:opacity-50"
+                    >
+                      <option value="">
+                        {loadingCandidates ? "Memuat daftar siswa..." : candidates.length === 0 ? "Tidak ada siswa di database — ketik manual" : "— Pilih siswa —"}
+                      </option>
+                      {candidates.map((c) => (
+                        <option key={c.student_id} value={c.student_id}>
+                          {c.student_id} — {c.full_name}{c.face_status === "enrolled" ? " (sudah punya wajah — re-enroll menimpa)" : ""}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                   <div>
                     <label className="block text-xs font-semibold text-aici-dark mb-1">
                       Student ID / NIS <span className="text-rose-500">*</span>

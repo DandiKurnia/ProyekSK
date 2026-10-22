@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { supabaseServer } from "@/lib/supabase-server";
 
 // POST /api/face/recognize { image_base64, min_confidence? }
 // Diteruskan apa adanya ke POST :8200/recognize (contract: face-recognition.md).
@@ -30,6 +31,19 @@ export async function POST(request: Request) {
       signal: AbortSignal.timeout(25000),
     });
     const data = await res.json();
+    if (data.match && data.student_id) {
+      const { data: row } = await supabaseServer
+        .from("students")
+        .select("full_name, class_id")
+        .eq("student_id", data.student_id)
+        .maybeSingle();
+      if (row) {
+        return NextResponse.json(
+          { ...data, full_name: row.full_name, class_id: row.class_id },
+          { status: res.status }
+        );
+      }
+    }
     return NextResponse.json(data, { status: res.status });
   } catch (err: unknown) {
     return NextResponse.json(

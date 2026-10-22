@@ -14,7 +14,7 @@ import {
 const MENU = [
   { label: "Overview", icon: LayoutDashboard, href: "/" },
   { label: "Attendance", icon: ClipboardCheck, href: "/attendance" },
-  { label: "Students", icon: Users, href: "/students/enroll" },
+  { label: "Students", icon: Users, href: "/students" },
   { label: "Classes & Seats", icon: Armchair, href: "#" },
   { label: "Device Monitoring", icon: Cpu, href: "#" },
   { label: "Reports", icon: BarChart3, href: "#" },

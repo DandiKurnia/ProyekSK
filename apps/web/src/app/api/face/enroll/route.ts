@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-
+import { supabaseServer } from "@/lib/supabase-server";
 // POST /api/face/enroll { student_id, images_base64[] }
 // Operasi DESTUKTIF (re-enroll menimpa data lama) — hanya untuk operator.
 // Diteruskan ke POST :8200/enroll (contract: prd-students.md §3).
@@ -36,6 +36,33 @@ export async function POST(request: Request) {
       signal: AbortSignal.timeout(60000),
     });
     const data = await res.json();
+    if (res.ok && data.enrolled) {
+      // Sinkron: wajah tersimpan di .npz lokal -> tandai baris induk di Supabase.
+      const { data: updated, error: dbError } = await supabaseServer
+        .from("students")
+        .update({ face_status: "enrolled", face_enrolled_at: new Date().toISOString() })
+        .eq("student_id", student_id)
+        .select("student_id");
+      const syncOk = !dbError && updated && updated.length > 0;
+      if (!syncOk) {
+        // Rollback (A3): hapus embedding yatim dari .npz agar tidak ada wajah tanpa induk.
+        await fetch(`${FACE_URL}/enroll/${encodeURIComponent(student_id)}`, {
+          method: "DELETE",
+          signal: AbortSignal.timeout(15000),
+        }).catch(() => {});
+        return NextResponse.json(
+          {
+            enrolled: false,
+            supabase_synced: false,
+            error: dbError
+              ? `Supabase error: ${dbError.message} — embedding lokal dibatalkan (rollback).`
+              : `Wajah ${student_id} dibatalkan (rollback): student_id tidak ada di tabel students. Tambah data siswa dulu via /students.`,
+          },
+          { status: 422 }
+        );
+      }
+      return NextResponse.json({ ...data, supabase_synced: true }, { status: res.status });
+    }
     return NextResponse.json(data, { status: res.status });
   } catch (err: unknown) {
     return NextResponse.json(

@@ -28,6 +28,8 @@ interface RecognizeResult {
   faces_detected: number;
   match: boolean;
   student_id: string | null;
+  full_name?: string | null;
+  class_id?: string | null;
   confidence: number;
   threshold_used: number;
   reason?: string | null;
@@ -140,12 +142,31 @@ export default function CameraKioskPage() {
 
     setScanning(true);
     try {
+      // Crop ke area oval (rasio 3:4) + mask elips: piksel di luar oval jadi hitam
+      // agar YuNet tidak mendeteksi wajah di luar panduan UI.
+      const OVAL_ASPECT = 3 / 4;
+      let cw = video.videoWidth;
+      let ch = Math.round(cw / OVAL_ASPECT);
+      if (ch > video.videoHeight) {
+        ch = video.videoHeight;
+        cw = Math.round(ch * OVAL_ASPECT);
+      }
+      const sx = (video.videoWidth - cw) / 2;
+      const sy = (video.videoHeight - ch) / 2;
+
       const canvas = canvasRef.current ?? document.createElement("canvas");
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
+      canvas.width = cw;
+      canvas.height = ch;
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = "#000";
+      ctx.fillRect(0, 0, cw, ch);
+      ctx.save();
+      ctx.beginPath();
+      ctx.ellipse(cw / 2, ch / 2, cw / 2 - 2, ch / 2 - 2, 0, 0, Math.PI * 2);
+      ctx.clip();
+      ctx.drawImage(video, sx, sy, cw, ch, 0, 0, cw, ch);
+      ctx.restore();
       const base64 = canvas.toDataURL("image/jpeg", 0.85);
 
       const res = await fetch("/api/face/recognize", {
@@ -170,6 +191,8 @@ export default function CameraKioskPage() {
           faces_detected: data.faces_detected ?? 0,
           match: Boolean(data.match),
           student_id: data.student_id ?? null,
+          full_name: data.full_name ?? null,
+          class_id: data.class_id ?? null,
           confidence: Number(data.confidence ?? 0),
           threshold_used: Number(data.threshold_used ?? minConfidence),
           reason: data.reason ?? null,
@@ -448,8 +471,11 @@ export default function CameraKioskPage() {
                       Wajah Terverifikasi (Kandidat Terkunci)
                     </span>
                     <h3 className="text-base font-bold text-aici-dark mt-0.5 truncate">
-                      {lastResult.student_id}
+                      {lastResult.full_name ?? lastResult.student_id}
                     </h3>
+                    <p className="text-[11px] text-aici-muted font-mono">
+                      {lastResult.student_id}{lastResult.class_id ? ` • ${lastResult.class_id}` : ""}
+                    </p>
                     <p className="text-xs text-emerald-700 mt-1 font-mono">
                       Skor SFace: {(lastResult.confidence * 100).toFixed(1)}% (ambang: {lastResult.threshold_used})
                     </p>
