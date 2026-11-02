@@ -7,6 +7,7 @@ Model dimuat sekali saat modul diimpor.
 # --- IMPORT LIBRARY ---
 import os  # Operasi path file/folder lintas sistem operasi (Windows/Linux)
 import time  # Stempel waktu baris oval_log.csv
+import urllib.request  # Unduh otomatis model ONNX dari OpenCV Zoo bila belum ada
 
 import cv2  # OpenCV contrib: resize gambar + mesin inferensi ONNX (FaceDetectorYN & FaceRecognizerSF)
 import numpy as np  # NumPy: operasi matriks, normalisasi vektor L2, dan baca/simpan file .npz
