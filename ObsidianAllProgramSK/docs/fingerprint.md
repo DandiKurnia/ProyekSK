@@ -165,3 +165,18 @@ flowchart LR
 ## Fallback ke Wi-Fi Polling
 
 Bila di lokasi fisik kabel USB tidak sampai ke meja absensi, beralihlah ke firmware Wi-Fi polling di [`archive/wifi-polling/fingerprint.md`](archive/wifi-polling/fingerprint.md). Firmware ESP32 cukup diganti dari sketch Serial ke sketch HTTP polling; antarmuka ke R503 tetap sama.
+
+## Implementasi (2026-11-02, branch `feat/fingerprint-serial-bridge`)
+
+| Lapisan | File | Status |
+|---|---|---|
+| Driver serial | `apps/face-service/fingerprint_serial.py` (`FingerprintBridge`) | ✅ Uji firmware palsu: 13 cek lolos |
+| API lokal | `server.py`: `GET /fingerprint/status`, `POST /fingerprint/enroll` → 202 lalu polling `GET /fingerprint/enroll/status`, `DELETE /fingerprint/{slot}`, sesi 2FA (`POST/GET/DELETE /fingerprint/session`) | ✅ Smoke TestClient lolos |
+| Proxy Next | `apps/web/src/app/api/fingerprint/*` — enroll mengalokasikan slot terkecil bebas (1..200), tandai `pending`, sukses → `enrolled`; gagal pada slot baru → rollback `DELETE` + `not_enrolled` | ✅ Smoke E2E lewat Chromium, DB terverifikasi |
+| UI enroll | `/students/enroll` langkah 2 "Daftarkan Sidik Jari" (polling 700 ms + hitung mundur) | ✅ Terverifikasi di Chromium |
+| UI kiosk | `/camera`: wajah cocok + `fingerprint_slot` → sesi dibuka otomatis; panel `waiting/verified/failed/expired` | ⚠️ Render OK; alur penuh butuh webcam + sensor nyata |
+| Test abadi | `apps/face-service/test_fingerprint_bridge.py` — `main()` (driver, 13 cek) + `check_api()` (HTTP, 4 cek) | — |
+
+Belum dikerjakan (menunggu keputusan/hardware): `POST /api/attendance` dari kiosk saat `verified`, `LED_OK` setelah absensi tercatat, tombol `CLEAR` destruktif di UI.
+
+> Lihat juga: [cara-kerja-2fa.md](cara-kerja-2fa.md) — cara kerja pencocokan wajah dengan sidik jari R503.

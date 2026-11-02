@@ -13,6 +13,7 @@ import {
   ScanFace,
   Layers,
   Sparkles,
+  Fingerprint,
 } from "lucide-react";
 import { Sidebar } from "@/components/Sidebar";
 import { Topbar } from "@/components/Topbar";
@@ -256,6 +257,62 @@ export default function StudentFaceEnrollPage() {
       delete copy[slot];
       return copy;
     });
+  };
+
+  // --- Sidik jari (faktor 2) — sensor R503 lewat bridge USB Serial di face-service ---
+  const [fp, setFp] = useState<{ state: "idle" | "running" | "done" | "error"; message?: string }>({ state: "idle" });
+  const fpPoll = useRef<number | null>(null);
+  useEffect(() => () => { if (fpPoll.current) window.clearInterval(fpPoll.current); }, []);
+
+  const startFingerprint = async () => {
+    const cleanId = studentId.trim();
+    if (!cleanId) return;
+    setFp({ state: "running", message: "Mengirim perintah ENROLL ke ESP32..." });
+    try {
+      const res = await fetch("/api/fingerprint/enroll", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ student_id: cleanId }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      const slot: number = data.slot;
+      const startedAt = Date.now();
+      setFp({ state: "running", message: `Slot ${slot} — tempel jari 2x di sensor` });
+
+      fpPoll.current = window.setInterval(async () => {
+        try {
+          const r = await fetch(
+            `/api/fingerprint/enroll/status?student_id=${encodeURIComponent(cleanId)}&slot=${slot}&re_enroll=${data.re_enroll ? 1 : 0}`,
+            { cache: "no-store" }
+          );
+          const s = await r.json();
+          if (s.done) {
+            window.clearInterval(fpPoll.current!);
+            fpPoll.current = null;
+            setFp({
+              state: s.ok ? "done" : "error",
+              message: s.ok
+                ? `Sidik jari tersimpan di slot ${slot}. 2FA siap dipakai.`
+                : s.detail ?? `Enrollment gagal (kode ${s.code})`,
+            });
+          } else if (s.active) {
+            const left = Math.max(0, 45 - Math.round((Date.now() - startedAt) / 1000));
+            const stage =
+              s.stage === "wait_finger_2"
+                ? "Tempel ulang jari (sampel 2/2)"
+                : s.stage === "wait_finger_1"
+                  ? "Tempel jari (sampel 1/2)"
+                  : "Menunggu sensor...";
+            setFp({ state: "running", message: `${stage} • ${left} dtk` });
+          }
+        } catch {
+          // Jaringan putus sesaat: biarkan pesan terakhir, polling lanjut
+        }
+      }, 700);
+    } catch (err: unknown) {
+      setFp({ state: "error", message: err instanceof Error ? err.message : "Gagal memulai enrollment sidik jari" });
+    }
   };
 
   // Submit enrollment ke backend FastAPI
@@ -686,6 +743,38 @@ export default function StudentFaceEnrollPage() {
                         ? "Memproses SFace Embedding..."
                         : `Simpan Enrollment (${sampleCount} Sampel)`}
                     </span>
+                  </button>
+                </div>
+
+                {/* Langkah 2: sidik jari — firmware serial, wajah dulu lalu jari */}
+                <div className="p-4 bg-aici-surface rounded-2xl border border-aici-border/60 text-xs space-y-2">
+                  <p className="font-semibold text-aici-dark flex items-center gap-2">
+                    <Fingerprint className="w-4 h-4" /> Langkah 2 — Sidik Jari
+                  </p>
+                  <p className="text-[11px] text-aici-muted">
+                    Simpan sampel wajah di atas, lalu daftarkan sidik jari ke slot sensor.
+                  </p>
+                  {fp.state !== "idle" && (
+                    <p
+                      className={
+                        fp.state === "done"
+                          ? "text-aici-success font-semibold"
+                          : fp.state === "error"
+                            ? "text-aici-error font-semibold"
+                            : "text-aici-muted"
+                      }
+                    >
+                      {fp.message}
+                    </p>
+                  )}
+                  <button
+                    type="button"
+                    onClick={startFingerprint}
+                    disabled={fp.state === "running" || !studentId.trim()}
+                    className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl border border-aici-border hover:bg-aici-surface-nested text-xs font-bold text-aici-dark transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <Fingerprint className="w-4 h-4" />
+                    <span>{fp.state === "running" ? "Sensor merekam..." : "Daftarkan Sidik Jari"}</span>
                   </button>
                 </div>
               </form>

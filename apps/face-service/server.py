@@ -259,3 +259,112 @@ def delete_enrollment(student_id: str):
         "deleted": True,
         "total_registered": len(db),
     }
+
+# --- BAGIAN 2: JEMBATAN SIDIK JARI (USB SERIAL) ---
+import threading as _threading  # Pekerja latar untuk enroll sidik jari (bloking 40 dtk)
+
+import fingerprint_serial as fp  # Driver USB Serial: parser baris, antrian perintah, sesi 2FA
+
+
+# Format input POST /fingerprint/enroll & POST /fingerprint/session
+class FingerJob(BaseModel):
+    slot: int = Field(..., ge=1, le=200, description="Slot memori sensor 1..200")
+
+
+class FingerSession(BaseModel):
+    student_id: str = Field(..., min_length=1, description="NIS pemilik sesi 2FA")
+    slot: int = Field(..., ge=1, le=200, description="Slot sidik jari yang ditunggu")
+    ttl: float = Field(30.0, ge=5, le=120, description="Umur sesi dalam detik")
+
+
+# Satu pekerjaan enroll dalam satu waktu: firmware tidak bisa melayani 2 enroll paralel.
+_fp_job = {"active": False, "slot": None, "ok": None, "code": None, "detail": None}
+_fp_job_lock = _threading.Lock()
+
+
+@app.on_event("startup")
+def _fp_start():
+    fp.bridge.start()  # Buka COM port + thread pembaca; gagal -> auto-retry tiap 2 dtk
+
+
+@app.on_event("shutdown")
+def _fp_stop():
+    fp.bridge.stop()
+
+
+# --- ENDPOINT 5: STATUS PERANGKAT SIDIK JARI ---
+@app.get("/fingerprint/status")
+def fingerprint_status():
+    return fp.bridge.status()
+
+
+# --- ENDPOINT 6: MULAI ENROLLMENT SIDIK JARI (ASINKRON) ---
+@app.post("/fingerprint/enroll", status_code=status.HTTP_202_ACCEPTED)
+def fingerprint_enroll(req: FingerJob):
+    with _fp_job_lock:
+        if _fp_job["active"]:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Enrollment slot {_fp_job['slot']} masih berjalan",
+            )
+        if not fp.bridge.connected:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="ESP32 fingerprint tidak terhubung (cek kabel USB / port)",
+            )
+        _fp_job.update(active=True, slot=req.slot, ok=None, code=None, detail=None)
+
+    def _worker(slot: int):
+        hasil = fp.bridge.enroll(slot)  # Blokir maks 40 dtk: tunggu 2x tempel jari
+        with _fp_job_lock:
+            _fp_job.update(
+                active=False,
+                ok=hasil["ok"],
+                code=hasil.get("code"),
+                detail=hasil.get("error"),
+            )
+
+    _threading.Thread(target=_worker, args=(req.slot,), daemon=True).start()
+    return {"started": True, "slot": req.slot}
+
+
+# --- ENDPOINT 7: STATUS PEKERJAAN ENROLLMENT (POLLING UI) ---
+@app.get("/fingerprint/enroll/status")
+def fingerprint_enroll_status():
+    with _fp_job_lock:
+        job = dict(_fp_job)
+    job["stage"] = (fp.bridge.status()["enroll"] or {}).get("stage") if job["active"] else None
+    return job
+
+
+# --- ENDPOINT 8: HAPUS SLOT SIDIK JARI ---
+@app.delete("/fingerprint/{slot}")
+def fingerprint_delete(slot: int):
+    if not 1 <= slot <= 200:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="slot harus 1..200")
+    hasil = fp.bridge.delete(slot)
+    if not hasil["ok"]:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=hasil.get("error", "hapus slot gagal"),
+        )
+    return {"slot": slot, "deleted": True}
+
+
+# --- ENDPOINT 9-11: SESI VERIFIKASI 2FA (WAJAH KUNCI -> TUNGGU JARI) ---
+@app.post("/fingerprint/session", status_code=status.HTTP_201_CREATED)
+def fingerprint_session_open(req: FingerSession):
+    hasil = fp.bridge.open_session(req.student_id.strip(), req.slot, req.ttl)
+    if not hasil["ok"]:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=hasil["error"])
+    return hasil
+
+
+@app.get("/fingerprint/session")
+def fingerprint_session_get():
+    return fp.bridge.session()
+
+
+@app.delete("/fingerprint/session")
+def fingerprint_session_cancel():
+    return fp.bridge.cancel_session()

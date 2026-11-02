@@ -33,6 +33,7 @@ interface RecognizeResult {
   student_id: string | null;
   full_name?: string | null;
   class_id?: string | null;
+  fingerprint_slot?: number | null;
   confidence: number;
   threshold_used: number;
   reason?: string | null;
@@ -66,6 +67,55 @@ export default function CameraKioskPage() {
   const [facePresent, setFacePresent] = useState<boolean | null>(null);
   const [facePartial, setFacePartial] = useState(false); // wajah terdeteksi tapi terpotong tepi frame
   const [faceOutside, setFaceOutside] = useState(false); // seluruh kotak wajah di luar oval panduan
+
+  interface TwoFa {
+    state: "waiting" | "verified" | "failed" | "expired" | "error";
+    message?: string;
+  }
+
+  // --- 2FA: wajah cocok -> buka sesi tunggu sidik jari (max 1 sesi per wajah) ---
+  const [twofa, setTwofa] = useState<TwoFa | null>(null);
+  const twofaFor = useRef<string | null>(null); // student_id sesi yang sedang aktif
+  const twofaPoll = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (twofaPoll.current) window.clearInterval(twofaPoll.current);
+    },
+    []
+  );
+
+  const startTwoFa = useCallback(async (studentId: string, slot: number) => {
+    if (twofaFor.current === studentId) return; // auto-scan kirim frame tiap 1.8 dtk: jangan buka sesi ganda
+    twofaFor.current = studentId;
+    setTwofa({ state: "waiting" });
+    try {
+      const res = await fetch("/api/fingerprint/session", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ student_id: studentId, slot, ttl: 30 }),
+      });
+      const opened = await res.json();
+      if (!res.ok) throw new Error(opened.detail ?? opened.error ?? `HTTP ${res.status}`);
+    } catch (err: unknown) {
+      twofaFor.current = null;
+      setTwofa({ state: "error", message: err instanceof Error ? err.message : "ESP32 tidak terhubung" });
+      return;
+    }
+    twofaPoll.current = window.setInterval(async () => {
+      try {
+        const r = await fetch("/api/fingerprint/session", { cache: "no-store" });
+        const s = await r.json();
+        if (s.state !== "waiting") {
+          window.clearInterval(twofaPoll.current!);
+          twofaPoll.current = null;
+          twofaFor.current = null;
+        }
+        setTwofa({ state: s.state, message: s.reason });
+      } catch {
+        // Jaringan putus sesaat: polling berikutnya mencoba lagi
+      }
+    }, 500);
+  }, []);
 
   // 1. Cek kesehatan backend FastAPI lokal
   const checkHealth = useCallback(async () => {
@@ -196,11 +246,16 @@ export default function CameraKioskPage() {
           student_id: data.student_id ?? null,
           full_name: data.full_name ?? null,
           class_id: data.class_id ?? null,
+          fingerprint_slot: data.fingerprint_slot ?? null,
           confidence: Number(data.confidence ?? 0),
           threshold_used: Number(data.threshold_used ?? minConfidence),
           reason: data.reason ?? null,
           timestamp: now,
         });
+        // Wajah cocok + siswa punya sidik jari -> kunci sesi, tunggu jari (TTL 30 dtk di server)
+        if (data.match && data.student_id && data.fingerprint_slot) {
+          startTwoFa(data.student_id, Number(data.fingerprint_slot));
+        }
       } else {
         setLastResult({
           faces_detected: 0,
@@ -225,7 +280,7 @@ export default function CameraKioskPage() {
     } finally {
       setScanning(false);
     }
-  }, [streamActive, scanning, minConfidence]);
+  }, [streamActive, scanning, minConfidence, startTwoFa]);
 
   // 5. Loop auto scan jika diaktifkan. Lewat ref supaya interval tidak dibuat ulang
   //    setiap `scanning` berubah (dulu bikin tick 1.8 dtk ter-reset terus).
@@ -571,22 +626,52 @@ export default function CameraKioskPage() {
                   </div>
                 </div>
 
-                {/* Petunjuk Langkah ke-2 (Fingerprint) */}
-                <div className="p-4 rounded-xl bg-blue-50 border border-blue-200 flex items-start gap-3">
-                  <div className="w-8 h-8 rounded-lg bg-blue-100 text-blue-600 flex items-center justify-center shrink-0">
-                    <Fingerprint className="w-5 h-5 animate-pulse" />
+                {/* Status Langkah ke-2 (Fingerprint) */}
+                {!lastResult.fingerprint_slot ? (
+                  <div className="p-4 rounded-xl bg-amber-50 border border-amber-200 text-[11px] text-amber-800">
+                    Siswa ini belum mendaftarkan sidik jari. Daftarkan dulu lewat menu Students →
+                    Enroll Fingerprint agar bisa absen 2FA.
                   </div>
-                  <div>
-                    <h4 className="text-xs font-bold text-blue-800">
-                      Langkah 2: Verifikasi Sidik Jari
-                    </h4>
-                    <p className="text-[11px] text-blue-900/70 mt-1 leading-relaxed">
-                      Tempelkan jari pada sensor <strong>R503</strong> di bawah
-                      webcam dalam waktu <strong>30 detik</strong> untuk
-                      menyelesaikan 2FA.
-                    </p>
+                ) : (
+                  <div
+                    className={
+                      twofa?.state === "verified"
+                        ? "p-4 rounded-xl bg-emerald-50 border border-emerald-200 flex items-start gap-3"
+                        : twofa?.state === "failed" || twofa?.state === "expired" || twofa?.state === "error"
+                          ? "p-4 rounded-xl bg-rose-50 border border-rose-200 flex items-start gap-3"
+                          : "p-4 rounded-xl bg-blue-50 border border-blue-200 flex items-start gap-3"
+                    }
+                  >
+                    <div className="w-8 h-8 rounded-lg bg-blue-100 text-blue-600 flex items-center justify-center shrink-0">
+                      {twofa?.state === "verified" ? (
+                        <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+                      ) : twofa?.state === "failed" || twofa?.state === "expired" || twofa?.state === "error" ? (
+                        <XCircle className="w-5 h-5 text-rose-500" />
+                      ) : (
+                        <Fingerprint className="w-5 h-5 animate-pulse" />
+                      )}
+                    </div>
+                    <div>
+                      <h4 className="text-xs font-bold text-blue-800">
+                        {twofa?.state === "verified"
+                          ? "Sidik Jari Cocok — 2FA Lolos"
+                          : twofa?.state === "failed"
+                            ? "Sidik Jari Salah 3x — sesi hangus"
+                            : twofa?.state === "expired"
+                              ? "Waktu habis (30 dtk) — scan wajah ulang"
+                              : twofa?.state === "error"
+                                ? `Sensor bermasalah: ${twofa.message ?? "ESP32 tidak terhubung"}`
+                                : "Langkah 2: Verifikasi Sidik Jari"}
+                      </h4>
+                      {(!twofa || twofa.state === "waiting") && (
+                        <p className="text-[11px] text-blue-900/70 mt-1 leading-relaxed">
+                          Tempelkan jari pada sensor <strong>R503</strong> di bawah webcam untuk menyelesaikan
+                          2FA.
+                        </p>
+                      )}
+                    </div>
                   </div>
-                </div>
+                )}
               </div>
             ) : (
               <div className="space-y-3">

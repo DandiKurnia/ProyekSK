@@ -34,12 +34,18 @@ export async function POST(request: Request) {
     if (data.match && data.student_id) {
       const { data: row } = await supabaseServer
         .from("students")
-        .select("full_name, class_id")
+        .select("full_name, class_id, fingerprint_slot, fingerprint_status")
         .eq("student_id", data.student_id)
         .maybeSingle();
       if (row) {
         return NextResponse.json(
-          { ...data, full_name: row.full_name, class_id: row.class_id },
+          {
+            ...data,
+            full_name: row.full_name,
+            class_id: row.class_id,
+            fingerprint_slot: row.fingerprint_slot,
+            fingerprint_status: row.fingerprint_status,
+          },
           { status: res.status }
         );
       }
