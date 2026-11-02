@@ -125,6 +125,8 @@ Konsekuensi desain: **gerbang sesi 2FA harus hidup di face service**, bukan di f
 
 ## Diagram Flowchart
 
+### Alur Lengkap (Face + Fingerprint 2FA)
+
 ```mermaid
 flowchart TB
     A[Wajah dikenali SFace] --> B[Kunci sesi lokal 30 dtk<br/>student_id + slot diharapkan]
@@ -136,6 +138,20 @@ flowchart TB
     B -. TTL habis tanpa event .-> H[Sesi expired]
     E --> I[POST final ke Route Handler]
     I --> J[LED_OK ke ESP32]
+```
+
+### Alur Sesi 2FA (Pencocokan Event Serial)
+
+Rincian penanganan event serial per sesi yang disepakati pada diskusi:
+
+```mermaid
+flowchart LR
+    A[Wajah terkunci<br/>kandidat + slot + TTL 30d] --> B{Siswa tempel jari}
+    B --> C[Event MATCH slot X datang]
+    C --> D{X == slot kandidat?}
+    D -- Ya --> E[Sah → POST /api/attendance → LED_OK]
+    D -- Beda --> F[Gagal: wajah ≠ jari]
+    C -. tanpa sesi aktif .-> G[Dibuang]
 ```
 
 ## Keamanan dan Batasan
