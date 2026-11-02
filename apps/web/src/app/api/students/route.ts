@@ -100,3 +100,71 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
+
+// DELETE /api/students?student_id=X — hapus permanen (bukan nonaktif).
+// Urutan: purge embedding .npz -> hapus riwayat attendance -> hapus baris induk.
+// Bila face-service tidak bisa memastikan embedding terhapus, batalkan supaya
+// tidak ada wajah yatim yang masih ikut dicocokkan oleh /recognize.
+const FACE_URL = process.env.FACE_SERVICE_URL ?? "http://127.0.0.1:8200";
+
+export async function DELETE(request: Request) {
+  try {
+    const student_id = (
+      new URL(request.url).searchParams.get("student_id") ?? ""
+    ).trim();
+    if (!student_id) {
+      return NextResponse.json({ error: "student_id wajib diisi" }, { status: 400 });
+    }
+
+    // 1. Purge embedding lokal. 404 = memang tidak pernah enroll (aman dilanjut).
+    let facePurged = false;
+    try {
+      const res = await fetch(
+        `${FACE_URL}/enroll/${encodeURIComponent(student_id)}`,
+        { method: "DELETE", signal: AbortSignal.timeout(15000) }
+      );
+      if (res.ok) facePurged = true;
+      else if (res.status !== 404) {
+        return NextResponse.json(
+          { error: `face-service menolak hapus embedding (${res.status}). Dibatalkan.` },
+          { status: 502 }
+        );
+      }
+    } catch (err: unknown) {
+      return NextResponse.json(
+        {
+          error: `face-service tidak terjangkau (${
+            err instanceof Error ? err.message : String(err)
+          }). Dibatalkan agar tidak ada embedding yatim.`,
+        },
+        { status: 502 }
+      );
+    }
+
+    // 2. Riwayat absensi menahan FK student_id -> hapus dulu.
+    const att = await supabaseServer
+      .from("attendance")
+      .delete()
+      .eq("student_id", student_id);
+    if (att.error) throw att.error;
+
+    // 3. Baris induk.
+    const { data, error } = await supabaseServer
+      .from("students")
+      .delete()
+      .eq("student_id", student_id)
+      .select("student_id");
+    if (error) throw error;
+    if (!data || data.length === 0) {
+      return NextResponse.json(
+        { error: `Student ID "${student_id}" tidak ditemukan` },
+        { status: 404 }
+      );
+    }
+
+    return NextResponse.json({ student_id, deleted: true, face_purged: facePurged });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+}

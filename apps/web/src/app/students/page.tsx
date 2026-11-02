@@ -44,6 +44,8 @@ export default function StudentsPage() {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [savedStudent, setSavedStudent] = useState<{ student_id: string; full_name: string } | null>(null);
+  const [deleting, setDeleting] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const loadStudents = useCallback(async () => {
     setLoading(true);
@@ -111,6 +113,32 @@ export default function StudentsPage() {
       setSaving(false);
     }
   }, [newId, newName, newGender, newContact, activeClassId, loadStudents]);
+  // Hapus permanen: purge embedding .npz + riwayat attendance + baris induk.
+  const handleDelete = useCallback(
+    async (student: StudentItem) => {
+      const ok = window.confirm(
+        `Hapus permanen ${student.full_name} (${student.student_id})?\n\n` +
+          "Embedding wajah di .npz, riwayat absensi, dan data induk akan dihapus. Tidak bisa dibatalkan."
+      );
+      if (!ok) return;
+      setDeleting(student.student_id);
+      setDeleteError(null);
+      try {
+        const res = await fetch(
+          `/api/students?student_id=${encodeURIComponent(student.student_id)}`,
+          { method: "DELETE" }
+        );
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error ?? "Gagal menghapus siswa");
+        await loadStudents();
+      } catch (err: unknown) {
+        setDeleteError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setDeleting(null);
+      }
+    },
+    [loadStudents]
+  );
 
 
   useEffect(() => {
@@ -146,7 +174,7 @@ export default function StudentsPage() {
 
   return (
     <>
-      <div className="flex min-h-screen">
+      <div className="flex min-h-screen bg-[#F6F8FA]">
       <Sidebar active="Students" />
       <div className="flex-1 flex flex-col min-w-0">
         <Topbar
@@ -159,7 +187,7 @@ export default function StudentsPage() {
           onRefresh={loadStudents}
         />
 
-        <main className="p-4 md:p-6 space-y-5 max-w-[1400px]">
+        <main className="p-6 space-y-4 w-full flex-1">
           {/* Header Bar + Tombol Add Siswa di Atas */}
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
@@ -211,6 +239,11 @@ export default function StudentsPage() {
 
           {/* Table Container Card */}
           <div className="bg-aici-surface rounded-2xl border border-aici-border/60 shadow-sm p-4 md:p-6 space-y-4">
+            {deleteError && (
+              <p className="text-xs text-rose-600 bg-rose-50 border border-rose-200 rounded-xl px-3 py-2">
+                {deleteError}
+              </p>
+            )}
             {/* Filter & Search Bar */}
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="relative flex-1 min-w-[240px] max-w-md">
@@ -336,22 +369,32 @@ export default function StudentsPage() {
                             )}
                           </td>
                           <td className="py-3.5 px-3 text-right">
-                            {student.face_status !== "enrolled" ? (
-                              <Link
-                                href={`/students/enroll?student_id=${encodeURIComponent(student.student_id)}&name=${encodeURIComponent(student.full_name)}`}
-                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-aici-dark hover:bg-black text-white text-[11px] font-semibold transition-colors"
+                            <div className="inline-flex items-center gap-1.5 justify-end">
+                              {student.face_status !== "enrolled" ? (
+                                <Link
+                                  href={`/students/enroll?student_id=${encodeURIComponent(student.student_id)}&name=${encodeURIComponent(student.full_name)}`}
+                                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-aici-dark hover:bg-black text-white text-[11px] font-semibold transition-colors"
+                                >
+                                  <ScanFace className="w-3 h-3 text-aici-lime" />
+                                  <span>Scan Wajah</span>
+                                </Link>
+                              ) : (
+                                <Link
+                                  href={`/students/enroll?student_id=${encodeURIComponent(student.student_id)}&name=${encodeURIComponent(student.full_name)}`}
+                                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-aici-border text-aici-muted hover:text-aici-dark hover:bg-aici-surface-nested text-[11px] font-semibold transition-colors"
+                                >
+                                  <span>Re-enroll</span>
+                                </Link>
+                              )}
+                              <button
+                                onClick={() => void handleDelete(student)}
+                                disabled={deleting === student.student_id}
+                                title="Hapus permanen dari Supabase + embedding .npz"
+                                className="inline-flex items-center px-2.5 py-1 rounded-lg border border-rose-200 text-rose-600 hover:bg-rose-50 text-[11px] font-semibold transition-colors disabled:opacity-50"
                               >
-                                <ScanFace className="w-3 h-3 text-aici-lime" />
-                                <span>Scan Wajah</span>
-                              </Link>
-                            ) : (
-                              <Link
-                                href={`/students/enroll?student_id=${encodeURIComponent(student.student_id)}&name=${encodeURIComponent(student.full_name)}`}
-                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-aici-border text-aici-muted hover:text-aici-dark hover:bg-aici-surface-nested text-[11px] font-semibold transition-colors"
-                              >
-                                <span>Re-enroll</span>
-                              </Link>
-                            )}
+                                {deleting === student.student_id ? <span>Menghapus...</span> : <span>Hapus</span>}
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       );
@@ -384,13 +427,22 @@ export default function StudentsPage() {
                     <div className="text-[11px] text-aici-muted">
                       Wajah: {student.face_status === "enrolled" ? "✓" : "✗"} • Jari: {student.fingerprint_status === "enrolled" ? `#${student.fingerprint_slot}` : "✗"}
                     </div>
-                    <Link
-                      href={`/students/enroll?student_id=${encodeURIComponent(student.student_id)}`}
-                      className="inline-flex items-center gap-1 text-xs font-bold text-aici-dark"
-                    >
-                      <span>Enroll</span>
-                      <ChevronRight className="w-3.5 h-3.5" />
-                    </Link>
+                    <div className="flex items-center gap-3">
+                      <button
+                        onClick={() => void handleDelete(student)}
+                        disabled={deleting === student.student_id}
+                        className="text-xs font-semibold text-rose-600 disabled:opacity-50"
+                      >
+                        Hapus
+                      </button>
+                      <Link
+                        href={`/students/enroll?student_id=${encodeURIComponent(student.student_id)}`}
+                        className="inline-flex items-center gap-1 text-xs font-bold text-aici-dark"
+                      >
+                        <span>Enroll</span>
+                        <ChevronRight className="w-3.5 h-3.5" />
+                      </Link>
+                    </div>
                   </div>
                 </div>
               ))}

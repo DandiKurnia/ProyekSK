@@ -22,7 +22,7 @@
 - [ ] **C2. `/devices`** — daftar `devices` + flag `stale` + inspeksi per perangkat (PRD: `prd-devices.md`).
 - [ ] **C3. `/reports`** — agregat kehadiran + ekspor CSV (PRD: `prd-reports.md`).
 - [ ] **C4. `/settings`** (ADMIN) — kelola `app_config`: threshold, batas late (PRD: `prd-settings.md`).
-- [ ] **C5. Tabel induk `Students`** — list/edit/nonaktifkan (sekarang hanya `/students/enroll`).
+- [x] **C5. Tabel induk `Students`** — SELESAI 2026-11-01: list + tambah + hapus permanen (purge `.npz` + `attendance` + baris induk). Edit/nonaktif belum ada; masa testing sengaja hard delete. Lihat `daily/2026-11-01.md` §7.
 
 ## D. Keamanan (sebelum sidang/demo publik)
 
