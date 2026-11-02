@@ -213,7 +213,7 @@ Respons: record absensi tersimpan (`present`/`late`) atau ditolak (duplikat/atur
 
 ## Endpoint Service Lokal
 
-> `main.py` saat ini memakai keyboard (`v`/`e`/`c`/`q`). Tabel di bawah adalah kontrak FastAPI yang menggantikannya — **belum diimplementasikan**.
+> `server.py` (FastAPI) **sudah mengimplementasikan** empat endpoint di bawah; `main.py` tetap ada sebagai mode uji keyboard (`v`/`e`/`c`/`q`) tanpa HTTP.
 
 | Method & Path | Fungsi |
 |---|---|
@@ -228,6 +228,7 @@ Contoh `GET /health` → `200 OK`:
 {
   "status": "ok",
   "models": { "detector": "yunet_2023mar", "recognizer": "sface_2021dec" },
+  "oval": { "rx": 0.148, "ry": 0.35, "aspect": 0.75 },
   "registered_faces": 1
 }
 ```
@@ -282,6 +283,34 @@ Contoh `POST /enroll`:
   "samples_used": 2
 }
 ```
+
+## Skrip Uji & Alat Kalibrasi (`apps/face-service`) — terverifikasi 2026-11-02
+
+Semua perintah dijalankan dari folder service (model ONNX dimuat dari `models/` relatif ke folder ini):
+`cd apps/face-service`
+
+| File | Fungsi | Perintah |
+|---|---|---|
+| `face_engine.py` | **Mesin inti** — bukan skrip uji: `detect()` (YuNet), `embed()` (SFace), `recognize()` (cosine vs `.npz`), `guide_radii()`/`face_quality()` (aturan oval). Diimpor semua file di bawah | `import face_engine as fe` |
+| `server.py` | **Layanan produksi** — FastAPI `:8200` (`/health`, `/recognize`, `/enroll`, `DELETE /enroll/{id}`) | `python -m uvicorn server:app --port 8200` |
+| `test_yunet_box.py` | **Uji bounding box** — gambar kotak `[x,y,w,h]` + skor ke-14 YuNet + oval + label status (`ok`/`face_outside_oval`/`partial_face`/`no_face`) | `python test_yunet_box.py [--image foto.jpg --save keluar.jpg] [--size LxT]` |
+| `test_sface_points.py` | **Uji embedding** — gambar 5 landmark → `alignCrop` 112x112 → cetak vektor 128-d + cosine ke `.npz` | `python test_sface_points.py --image foto.jpg [--save keluar.jpg] [--clean] [--compare]` |
+| `fit_oval.py` | **Kalibrasi oval** — hitung `p95(oval_need)` dari `oval_log.csv` → usulan `GUIDE_RY` baru; `--write` menimpa `face_engine.py` | `python fit_oval.py` (pratinjau) · `python fit_oval.py --write` (tulis) |
+| `main.py` | **Uji keyboard interaktif** — YuNet tiap frame, SFace hanya saat tombol: `v`=verify · `e`=enroll · `c`=hapus label · `q`=keluar | `python main.py` (butuh webcam + jendela GUI) |
+
+> ⚠️ `test_yunet_box.py --oval-auto` mengaktifkan mode kumpul-sampel: tiap frame menulis ke `oval_log.csv` dan **saat keluar otomatis memanggil `fit_oval.write_engine()`** — `GUIDE_RY` di `face_engine.py` langsung berubah.
+
+### Hasil uji 2026-11-02 (fixture wajah sintetis + `.npz` berisi `40123233`, `40123292`)
+
+- `test_yunet_box.py --image face_big.jpg --no-gui` → `Wajah terdeteksi: 1  #1 x=6 y=10 w=392 h=534 skor=0.9219`, `status=partial_face` ✅ (kotak menyentuh tepi 512px → aturan `in_frame` benar menolak).
+- `test_sface_points.py --image face_big.jpg --compare --no-gui` → 5 landmark tercetak, vektor `shape=(128,) norm=10.73`, `TIDAK COCOK` vs `.npz` (`40123233 cosine=0.1676`, `40123292 cosine=-0.0521`, ambang 0.40) ✅.
+- `GET /health` (server sementara di `:8209`) → `registered_faces: 2, students: [40123233, 40123292], oval {rx 0.148, ry 0.35}` ✅.
+- `fit_oval.py` pratinjau pada `oval_log.csv` (1625 sampel) → `p95=1.821, ry=0.45` (**belum ditulis**, menunggu keputusan).
+
+### Batasan terukur: ambang default YuNet meleset pada wajah kecil/jauh
+
+`detect()` menurunkan frame ke `DET_WIDTH=240` dengan ambang skor default OpenCV 0.9. Pada fixture 512x512 dengan wajah ~35% lebar frame: skor di 240px hanya 0.891 → **nol wajah terdeteksi**, padahal resolusi penuh memberi 0.909. Wajah kecil/jauh berisiko tidak terdeteksi walau terlihat jelas di layar. Opsi (belum diputuskan): ambang 0.8 atau `DET_WIDTH` lebih besar.
+
 
 ## Diagram Flowchart
 
