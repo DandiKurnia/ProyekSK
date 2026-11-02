@@ -29,6 +29,105 @@ Yang ditolak: `face_recognition`/dlib (build C++ gagal di Windows), MediaPipe (A
 | FastAPI *(rencana)* | Membungkus pipeline menjadi API lokal (`/health`, `/recognize`, `/enroll`) |
 | Model ONNX | `face_detection_yunet_2023mar.onnx` (~227 KB), `face_recognition_sface_2021dec.onnx` (~37 MB), di `apps/face-service/models/` (git-ignored) |
 
+## Model yang Digunakan (YuNet + SFace)
+
+Dua model ONNX dari [OpenCV Zoo](https://github.com/opencv/opencv_zoo), dimuat lewat modul `cv2` (`FaceDetectorYN` / `FaceRecognizerSF`) — **bukan** PyTorch/TensorFlow, tanpa GPU.
+
+| Komponen | Model | File & ukuran | Peran | Lisensi |
+|---|---|---|---|---|
+| Detektor | **YuNet** `face_detection_yunet_2023mar` | `models/face_detection_yunet_2023mar.onnx` · 227 KB | Cari kotak wajah + 5 landmark (2 mata, hidung, 2 sudut mulut) | MIT |
+| Pengenal | **SFace** `face_recognition_sface_2021dec` | `models/face_recognition_sface_2021dec.onnx` · 36.9 MB | Crop ter-align 112×112 → vektor 128 angka | Apache-2.0 |
+
+Akurasi resmi (evaluasi OpenCV Zoo, `tools/eval`):
+
+| Model | Metrik | Nilai |
+|---|---|---|
+| YuNet | WIDER Face AP — Easy / Medium / Hard | 0.8844 / 0.8656 / 0.7503 |
+| SFace | Akurasi verifikasi (pasangan uji) | 0.9940 |
+
+### Dokumentasi & Sumber
+
+- **YuNet — model card:** https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet
+- **YuNet — paper:** Wu, Peng, Yu. *YuNet: A Tiny Millisecond-level Face Detector*, Machine Intelligence Research 20(5), 2023 → https://link.springer.com/article/10.1007/s11633-023-1423-y
+- **YuNet — kode training:** https://github.com/ShiqiYu/libfacedetection.train
+- **YuNet — API OpenCV:** https://docs.opencv.org/4.x/df/d20/classcv_1_1FaceDetectorYN.html
+- **SFace — model card:** https://github.com/opencv/opencv_zoo/tree/main/models/face_recognition_sface
+- **SFace — paper:** Li et al. *SFace: Sigmoid-Constrained Hypersphere Loss for Robust Face Recognition*, IEEE TIP 2021 → https://arxiv.org/abs/2205.12010
+- **SFace — kode asli:** https://github.com/zhongyy/SFace
+- **SFace — API OpenCV:** https://docs.opencv.org/4.10.0/da/d09/classcv_1_1FaceRecognizerSF.html
+- **Tutorial gabungan YuNet + SFace:** https://docs.opencv.org/4.x/d0/dd4/tutorial_dnn_face.html
+
+Catatan model card: SFace yang dipakai adalah **MobileFaceNet** yang dilatih dengan loss SFace; YuNet dapat mendeteksi wajah berukuran ±10×10 sampai 300×300 px.
+
+### Peran OpenCV vs Mengapa Tidak Pakai YOLO
+
+Sistem ini **memakai OpenCV** (`opencv-contrib-python`, diimpor sebagai `cv2`), tetapi **tidak memakai YOLO** (`ultralytics` / PyTorch) dan **tidak memakai Haar Cascade** lama (`haarcascade_frontalface_default.xml`).
+
+| Komponen / Library | Dipakai? | Fungsi di `apps/face-service/` |
+|---|---|---|
+| **OpenCV (`cv2`)** | **Ya** | 1) Decode gambar Base64 (`cv2.imdecode`) & resize frame (`cv2.resize`)<br>2) Mesin inferensi ONNX bawaan (`cv2.FaceDetectorYN` untuk YuNet, `cv2.FaceRecognizerSF` untuk SFace)<br>3) Alignment wajah 112×112 (`alignCrop`) & hitung kemiripan cosine (`match`) |
+| **YuNet (ONNX)** | **Ya** | Detektor wajah pengganti YOLO: langsung menghasilkan kotak wajah (`bbox`) **+ 5 titik landmark** (2 mata, hidung, 2 sudut mulut) |
+| **SFace (ONNX)** | **Ya** | Pengenal identitas: mengubah wajah 112×112 menjadi vektor 128 angka (`float32`) |
+| **YOLO (`ultralytics` / PyTorch)** | **Tidak** | Tidak dipakai — YOLO standar hanya mengeluarkan kotak objek tanpa 5 titik landmark wajah (padahal `SFace.alignCrop` wajib butuh 5 titik mata/hidung/mulut), serta butuh dependensi PyTorch (~2 GB) |
+| **Haar Cascade (OpenCV lama)** | **Tidak** | Tidak dipakai — mudah salah deteksi saat kepala miring/kacamata dan tidak punya 5 landmark |
+
+### Bukti visual (contoh resmi model)
+
+![YuNet — hasil deteksi pada selfie (OpenCV Zoo)](https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/example_outputs/largest_selfie.jpg)
+
+*YuNet: box + 5 landmark per wajah. Sumber: OpenCV Zoo `example_outputs`.*
+
+![SFace — verifikasi identitas (OpenCV Zoo)](https://github.com/opencv/opencv_zoo/raw/main/models/face_recognition_sface/example_outputs/demo.jpg)
+
+*SFace: kiri = identitas target, kanan = query. Box hijau = orang sama, merah = berbeda. Sumber: OpenCV Zoo `example_outputs`.*
+
+### Pipeline di `face_engine.py`
+
+```mermaid
+flowchart LR
+    A[frame webcam 640x480] -->|resize lebar 240 px| B[YuNet detect]
+    B -->|bbox + 5 landmark, skala dibalik| C[biggest: wajah terluas]
+    C --> D[SFace alignCrop 112x112]
+    D --> E[SFace feature: 128 float32]
+    E --> F[normalisasi L2]
+    F --> G[embedding .npz per student_id]
+    E --> H[cosine vs semua kunci .npz]
+    H --> I{skor >= 0.40 dan selisih rank1-rank2 >= 0.08?}
+    I -- ya --> J[kandidat terkunci]
+    I -- tidak --> K[tak dikenal, tanpa kirim]
+```
+
+Fakta teknis yang berlaku di kode:
+
+| Aspek | Nilai | Lokasi |
+|---|---|---|
+| Lebar input deteksi | 240 px (`DET_WIDTH`), koordinat diskalakan balik | `face_engine.py:22`, `detect()` |
+| Dimensi embedding | 128 float32 (dibuktikan dari `embeddings_yunet.npz`, shape `(128,)`) | `embed()` |
+| Metrik jarak | cosine (`FaceRecognizerSF_FR_COSINE`) | `cosine()` |
+| Ambang | `THRESHOLD = 0.40`, `MARGIN = 0.08` | `face_engine.py:20-21` |
+| Deteksi tiap frame | hanya YuNet; SFace on-demand (trigger) | `main.py`, `server.py` |
+| Unduh model | otomatis sekali via `urllib` bila file `.onnx` belum ada; `.onnx` di-gitignore | `_download()` |
+
+**Catatan akurasi enroll:** tiap sampel datang sebagai request terpisah, dan `enroll_embedding()` menyimpan `(vektor_lama + vektor_baru) / 2` lalu L2-normalize. Artinya bobot sampel lama mengecil tiap enroll baru — sampel terakhir paling dominan. Ini sengaja dipilih karena sederhana; bila hasil verifikasi terasa tidak stabil, naikkan ke penyimpanan multi-vektor (simpan semua sampel, bandingkan ke rata-rata penuh) tanpa mengubah kontrak endpoint.
+
+### Catatan Deteksi Kacamata (Dihapus)
+
+Sempat diuji coba heuristik piksel-gelap di band mata untuk mendeteksi kacamata dan memberi saran "lepas kacamata". Fitur ini **dihapus total** per 2026-11-01 setelah divalidasi langsung pada data webcam nyata (871 frame di `apps/face-service/kalibrasi.csv`):
+- Rata-rata rasio gelap mata:pipi untuk wajah tanpa-kacamata = `1.005` vs berkacamata = `1.014`.
+- Median justru terbalik (`1.067` vs `0.843`) akibat pantulan cahaya di permukaan lensa.
+- Ambang heuristik apa pun menghasilkan prediksi salah.
+
+Keputusan: heuristik dihapus, field `glasses` dibuang dari response `POST /recognize`, dan alert di UI web dihilangkan. Deteksi kacamata tidak menjadi syarat sistem absensi; bila kelak dihidupkan kembali, harus menggunakan classifier berbasis model terpisah (mis. ONNX terlatih).
+
+### Validasi Posisi Wajah di Oval Panduan (Bounding Box Extent)
+
+Pengecekan apakah wajah berada di dalam oval panduan dihitung dari **seluruh kotak wajah (bounding box YuNet)**, bukan hanya titik tengahnya:
+- Keempat sudut kotak wajah harus berada di dalam elips panduan (`GUIDE_RX` dan `GUIDE_RY`).
+- Nilai `oval_need` merepresentasikan radius vertikal minimum yang dibutuhkan agar kotak wajah termuat penuh di oval dengan rasio tetap (0.8).
+- Kalibrasi ukuran oval: jalankan `python test_yunet_box.py --oval-auto` selama ~10 detik. Saat keluar, skrip menghitung kuantil 95% dari distribusi `oval_need` dan otomatis memperbarui nilai `GUIDE_RX, GUIDE_RY` di `face_engine.py` (via `fit_oval.py`).
+- Komponen web di `/camera` mengambil nilai geometri oval secara dinamis dari endpoint `GET /health` sehingga UI klien dan server selalu seirama.
+- Wadah video web mengikuti rasio kamera aktual (`videoAspect`) dan `object-contain` (tanpa crop), sehingga proporsi oval FE 100% identik dengan koordinat Python. Gunakan flag `--size LxT` pada `test_yunet_box.py` bila ingin mengunci resolusi sama persis dengan stream browser.
+
 ## Kebutuhan Perangkat dan Model
 
 | Kebutuhan | Terverifikasi |

@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { Sidebar } from "@/components/Sidebar";
 import { Topbar } from "@/components/Topbar";
+import { useOvalGuide } from "@/lib/oval-guide";
 import type { ClassOption } from "@/lib/overview";
 
 const SAMPLES_GUIDE = [
@@ -29,6 +30,17 @@ const SAMPLES_GUIDE = [
 export default function StudentFaceEnrollPage() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  // Geometri oval portrait 3:4 + rasio frame aktual: identik dengan /camera dan Python (GUIDE_ASPECT).
+  const {
+    setOvalFrom,
+    syncVideoSize,
+    resetVideoSize,
+    ovalWidthPct,
+    ovalHeightPct,
+    videoAspect,
+    frameLabel,
+    ovalPx,
+  } = useOvalGuide(videoRef);
 
   const [streamActive, setStreamActive] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
@@ -77,6 +89,10 @@ export default function StudentFaceEnrollPage() {
     type: "success" | "error" | "info";
     message: string;
   } | null>(null);
+  const [facePresent, setFacePresent] = useState<boolean | null>(null);
+  const [faceHint, setFaceHint] = useState<string>(""); // alasan oval merah (terpotong / di luar oval)
+  const presenceBusyRef = useRef(false);
+
 
   const [serviceOnline, setServiceOnline] = useState<boolean | null>(null);
 
@@ -85,26 +101,29 @@ export default function StudentFaceEnrollPage() {
     try {
       const res = await fetch("/api/face/health", { cache: "no-store" });
       setServiceOnline(res.ok);
+      if (res.ok) setOvalFrom(await res.json()); // oval: { rx, ry } dari face_engine.py
     } catch {
       setServiceOnline(false);
     }
-  }, []);
+  }, [setOvalFrom]);
 
   useEffect(() => {
     checkService();
   }, [checkService]);
 
-  // Start webcam
+  // Start webcam: ideal 1280x720, sama dengan default `--size` di test_yunet_box.py
   const startCamera = async () => {
     setCameraError(null);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: 640, height: 480, facingMode: "user" },
+        video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: "user" },
         audio: false,
       });
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play();
+      const v = videoRef.current;
+      if (v) {
+        v.srcObject = stream;
+        await v.play();
+        syncVideoSize(); // ukur bingkai aktual: kamera bisa menolak 16:9
       }
       setStreamActive(true);
     } catch (err: unknown) {
@@ -124,17 +143,85 @@ export default function StudentFaceEnrollPage() {
       videoRef.current.srcObject = null;
     }
     setStreamActive(false);
+    resetVideoSize(); // wadah kembali ke 4:3 sampai stream baru terukur
   };
 
   useEffect(() => {
     return () => stopCamera();
   }, []);
+  // Deteksi kehadiran wajah untuk pewarnaan oval: probing ringan tiap 1.2 dtk.
+  // Hijau = wajah di dalam oval panduan (sampel layak kirim); merah = info alasan.
+  useEffect(() => {
+    if (!streamActive) {
+      setFacePresent(null);
+      setFaceHint("");
+      return;
+    }
+    let alive = true;
+    const probe = async () => {
+      if (presenceBusyRef.current || !videoRef.current) return;
+      const v = videoRef.current;
+      if (v.videoWidth === 0) return;
+      syncVideoSize(); // pastikan state selalu sama dengan frame aktual (anti wadah nyangkut 4:3)
+      presenceBusyRef.current = true;
+      try {
+        const cnv = document.createElement("canvas");
+        cnv.width = 320;
+        cnv.height = Math.round((v.videoHeight * 320) / v.videoWidth);
+        const ctx2 = cnv.getContext("2d");
+        if (!ctx2) return;
+        ctx2.drawImage(v, 0, 0, cnv.width, cnv.height);
+        const res = await fetch("/api/face/recognize", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            image_base64: cnv.toDataURL("image/jpeg", 0.6),
+            min_confidence: 0.4,
+            margin: 0.08,
+          }),
+        });
+        if (!alive || !res.ok) return;
+        const d = await res.json();
+        const detected = Number(d.faces_detected ?? 0) > 0;
+        const inFrame = d.face_in_frame !== false; // server lama tanpa field -> anggap utuh
+        const outside = d.reason === "face_outside_oval";
+        setFacePresent(detected && inFrame && !outside);
+        setFaceHint(
+          !detected
+            ? ""
+            : !inFrame
+            ? "Wajah terpotong tepi frame — geser ke tengah"
+            : outside
+            ? "Wajah di luar oval — dekati oval hijau"
+            : ""
+        );
+      } catch {
+        // Abaikan: warna oval mempertahankan status terakhir.
+      } finally {
+        presenceBusyRef.current = false;
+      }
+    };
+    probe();
+    const t = setInterval(probe, 1200);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, [streamActive, syncVideoSize]);
+
 
   // Ambil 1 sampel frame ke slot berikutnya yang kosong
   const captureSample = (targetSlot?: number) => {
     if (!videoRef.current || !streamActive) return;
     const v = videoRef.current;
     if (v.videoWidth === 0 || v.videoHeight === 0) return;
+    if (facePresent === false) {
+      setFeedback({
+        type: "error",
+        message: faceHint || "Wajah tidak terdeteksi. Posisikan wajah di dalam oval hijau sebelum mengambil sampel.",
+      });
+      return;
+    }
 
     const canvas = canvasRef.current ?? document.createElement("canvas");
     canvas.width = v.videoWidth;
@@ -331,19 +418,25 @@ export default function StudentFaceEnrollPage() {
                   {streamActive && (
                     <span className="text-[11px] font-mono text-emerald-600 flex items-center gap-1">
                       <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
-                      640×480
+                      {frameLabel}
+                      {ovalPx && ` · oval ${ovalPx}`}
                     </span>
                   )}
                 </div>
 
-                {/* Viewport Video */}
-                <div className="relative aspect-[4/3] bg-slate-900 rounded-xl overflow-hidden flex items-center justify-center">
+                {/* Wadah ikut rasio stream asli: tanpa crop, oval FE = oval Python */}
+                <div
+                  style={{ aspectRatio: String(videoAspect ?? 4 / 3) }}
+                  className="relative w-full bg-slate-900 rounded-xl overflow-hidden flex items-center justify-center"
+                >
                   <video
                     ref={videoRef}
                     playsInline
                     autoPlay
                     muted
-                    className={`w-full h-full object-cover ${
+                    onLoadedMetadata={syncVideoSize}
+                    onResize={syncVideoSize}
+                    className={`w-full h-full object-contain ${
                       streamActive ? "opacity-100" : "opacity-0"
                     }`}
                   />
@@ -370,12 +463,31 @@ export default function StudentFaceEnrollPage() {
                     </div>
                   )}
 
-                  {/* Reticle Oval Wajah */}
+                  {/* Reticle oval: ukuran dari GET /health (GUIDE_RX/RY di server) */}
                   {streamActive && (
                     <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
-                      <div className="w-48 h-64 rounded-[50%] border-2 border-dashed border-white/60 shadow-[0_0_20px_rgba(255,255,255,0.2)] flex items-center justify-center">
-                        <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-black/60 text-white/90">
-                          Posisikan Wajah di Oval
+                      <div
+                        style={{ width: `${ovalWidthPct}%`, height: `${ovalHeightPct}%` }}
+                        className={`rounded-[50%] border-2 transition-all duration-300 flex items-center justify-center ${
+                          facePresent === true
+                            ? "border-emerald-400 border-solid shadow-[0_0_28px_rgba(16,185,129,0.45)]"
+                            : facePresent === false
+                            ? "border-rose-500 border-dashed shadow-[0_0_24px_rgba(244,63,94,0.4)]"
+                            : "border-white/60 border-dashed shadow-[0_0_20px_rgba(255,255,255,0.2)]"
+                        }`}
+                      >
+                        <span
+                          className={`text-[10px] font-semibold px-2 py-0.5 rounded-full text-white transition-colors ${
+                            facePresent === true
+                              ? "bg-emerald-600/85"
+                              : facePresent === false
+                              ? "bg-rose-600/85"
+                              : "bg-black/60"
+                          }`}
+                        >
+                          {facePresent === true
+                            ? "Wajah Terdeteksi — Siap Ambil"
+                            : faceHint || "Posisikan Wajah di Oval"}
                         </span>
                       </div>
                     </div>

@@ -1,6 +1,6 @@
 "use client";
-
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useOvalGuide } from "@/lib/oval-guide";
 import Link from "next/link";
 import {
   Camera,
@@ -24,8 +24,11 @@ interface HealthStatus {
   error?: string;
 }
 
+// (geometri oval panduan kini dari hook bersama `useOvalGuide`)
+
 interface RecognizeResult {
   faces_detected: number;
+  face_in_frame?: boolean;
   match: boolean;
   student_id: string | null;
   full_name?: string | null;
@@ -39,7 +42,17 @@ interface RecognizeResult {
 export default function CameraKioskPage() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-
+  // Geometri oval + ukuran frame aktual dari hook bersama (sama dengan /students/enroll + Python).
+  const {
+    setOvalFrom,
+    syncVideoSize,
+    resetVideoSize,
+    videoAspect,
+    frameLabel,
+    ovalWidthPct,
+    ovalHeightPct,
+    ovalPx,
+  } = useOvalGuide(videoRef);
   const [streamActive, setStreamActive] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
@@ -50,6 +63,9 @@ export default function CameraKioskPage() {
   const [autoScan, setAutoScan] = useState(false);
   const [lastResult, setLastResult] = useState<RecognizeResult | null>(null);
   const [minConfidence, setMinConfidence] = useState<number>(0.4);
+  const [facePresent, setFacePresent] = useState<boolean | null>(null);
+  const [facePartial, setFacePartial] = useState(false); // wajah terdeteksi tapi terpotong tepi frame
+  const [faceOutside, setFaceOutside] = useState(false); // seluruh kotak wajah di luar oval panduan
 
   // 1. Cek kesehatan backend FastAPI lokal
   const checkHealth = useCallback(async () => {
@@ -62,6 +78,7 @@ export default function CameraKioskPage() {
         registered_faces: data.registered_faces ?? 0,
         students: data.students ?? [],
       });
+      setOvalFrom(data); // oval: { ry, aspect } dari GUIDE_RY/GUIDE_ASPECT di face_engine.py
     } catch (err: unknown) {
       setHealth({
         status: "offline",
@@ -71,7 +88,7 @@ export default function CameraKioskPage() {
             : "Service FastAPI lokal belum aktif (:8200)",
       });
     }
-  }, []);
+  }, [setOvalFrom]);
 
   useEffect(() => {
     checkHealth();
@@ -94,7 +111,6 @@ export default function CameraKioskPage() {
       .catch(() => {});
   }, [selectedDeviceId]);
 
-  // 3. Start / stop webcam stream
   const startCamera = async (deviceId?: string) => {
     setCameraError(null);
     try {
@@ -102,16 +118,19 @@ export default function CameraKioskPage() {
         const prev = videoRef.current.srcObject as MediaStream;
         prev.getTracks().forEach((t) => t.stop());
       }
+      // ideal 1280x720 = rasio 16:9, sama dengan default --size di test_yunet_box.py
       const constraints: MediaStreamConstraints = {
         video: deviceId
-          ? { deviceId: { exact: deviceId }, width: 640, height: 480 }
-          : { width: 640, height: 480, facingMode: "user" },
+          ? { deviceId: { exact: deviceId }, width: { ideal: 1280 }, height: { ideal: 720 } }
+          : { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: "user" },
         audio: false,
       };
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play();
+      const v = videoRef.current;
+      if (v) {
+        v.srcObject = stream;
+        await v.play();
+        syncVideoSize(); // ukur bingkai aktual: kamera bisa menolak 16:9 dan memberi rasio lain
       }
       setStreamActive(true);
     } catch (err: unknown) {
@@ -131,9 +150,10 @@ export default function CameraKioskPage() {
       videoRef.current.srcObject = null;
     }
     setStreamActive(false);
-    setAutoScan(false);
+    resetVideoSize(); // wadah kembali ke 4:3 sampai stream baru terukur
+    setFacePresent(null);
+    setFaceOutside(false);
   };
-
   // 4. Capture 1 frame & kirim ke /api/face/recognize
   const captureAndRecognize = useCallback(async () => {
     if (!videoRef.current || !streamActive || scanning) return;
@@ -142,31 +162,14 @@ export default function CameraKioskPage() {
 
     setScanning(true);
     try {
-      // Crop ke area oval (rasio 3:4) + mask elips: piksel di luar oval jadi hitam
-      // agar YuNet tidak mendeteksi wajah di luar panduan UI.
-      const OVAL_ASPECT = 3 / 4;
-      let cw = video.videoWidth;
-      let ch = Math.round(cw / OVAL_ASPECT);
-      if (ch > video.videoHeight) {
-        ch = video.videoHeight;
-        cw = Math.round(ch * OVAL_ASPECT);
-      }
-      const sx = (video.videoWidth - cw) / 2;
-      const sy = (video.videoHeight - ch) / 2;
-
+      // Kirim frame utuh (tanpa mask elips): oval murni panduan UI, bukan filter piksel.
+      // Kalau dipotong/masking, wajah yang sedikit keluar oval bisa gagal terdeteksi.
       const canvas = canvasRef.current ?? document.createElement("canvas");
-      canvas.width = cw;
-      canvas.height = ch;
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
-      ctx.fillStyle = "#000";
-      ctx.fillRect(0, 0, cw, ch);
-      ctx.save();
-      ctx.beginPath();
-      ctx.ellipse(cw / 2, ch / 2, cw / 2 - 2, ch / 2 - 2, 0, 0, Math.PI * 2);
-      ctx.clip();
-      ctx.drawImage(video, sx, sy, cw, ch, 0, 0, cw, ch);
-      ctx.restore();
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
       const base64 = canvas.toDataURL("image/jpeg", 0.85);
 
       const res = await fetch("/api/face/recognize", {
@@ -224,14 +227,66 @@ export default function CameraKioskPage() {
     }
   }, [streamActive, scanning, minConfidence]);
 
-  // 5. Loop auto scan jika diaktifkan
+  // 5. Loop auto scan jika diaktifkan. Lewat ref supaya interval tidak dibuat ulang
+  //    setiap `scanning` berubah (dulu bikin tick 1.8 dtk ter-reset terus).
+  const scanRef = useRef(captureAndRecognize);
+  useEffect(() => {
+    scanRef.current = captureAndRecognize;
+  }, [captureAndRecognize]);
   useEffect(() => {
     if (!autoScan || !streamActive) return;
-    const timer = setInterval(() => {
-      captureAndRecognize();
-    }, 1800);
+    const timer = setInterval(() => scanRef.current(), 1800);
     return () => clearInterval(timer);
-  }, [autoScan, streamActive, captureAndRecognize]);
+  }, [autoScan, streamActive]);
+
+  // 6. Probing ringan tiap 1.2 dtk: warna oval mengikuti ada/tidaknya wajah di frame.
+  useEffect(() => {
+    if (!streamActive) {
+      setFacePresent(null);
+      setFacePartial(false);
+      setFaceOutside(false);
+      return;
+    }
+    let alive = true;
+    const probe = async () => {
+      const v = videoRef.current;
+      if (!v || v.videoWidth === 0) return;
+      syncVideoSize(); // pastikan state selalu sama dengan frame aktual (anti wadah nyangkut 4:3)
+      try {
+        const cnv = document.createElement("canvas");
+        cnv.width = 320;
+        cnv.height = Math.round((v.videoHeight * 320) / v.videoWidth);
+        const c2 = cnv.getContext("2d");
+        if (!c2) return;
+        c2.drawImage(v, 0, 0, cnv.width, cnv.height);
+        const res = await fetch("/api/face/recognize", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            image_base64: cnv.toDataURL("image/jpeg", 0.6),
+            min_confidence: minConfidence,
+            margin: 0.08,
+          }),
+        });
+        if (!alive || !res.ok) return;
+        const d = await res.json();
+        const detected = Number(d.faces_detected ?? 0) > 0;
+        const inFrame = d.face_in_frame !== false; // server lama tanpa field -> anggap utuh
+        const outside = d.reason === "face_outside_oval";
+        setFacePresent(detected && inFrame && !outside);
+        setFacePartial(detected && !inFrame);
+        setFaceOutside(outside);
+      } catch {
+        // Biarkan status terakhir: gangguan jaringan tidak mengubah warna.
+      }
+    };
+    probe();
+    const t = setInterval(probe, 1200);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, [streamActive, minConfidence, syncVideoSize]);
 
   return (
     <div className="min-h-screen bg-[#F6F8FA] text-aici-dark flex flex-col">
@@ -281,19 +336,26 @@ export default function CameraKioskPage() {
               {streamActive && (
                 <span className="text-[11px] font-mono text-emerald-600 flex items-center gap-1">
                   <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
-                  640×480
+                  {frameLabel}
+                  {ovalPx && ` · oval ${ovalPx}`}
                 </span>
               )}
             </div>
 
-            <div className="relative aspect-[4/3] bg-slate-900 rounded-xl overflow-hidden flex items-center justify-center">
+            {/* Wadah ikut rasio stream asli: tanpa crop, oval FE = oval Python */}
+            <div
+              style={{ aspectRatio: String(videoAspect ?? 4 / 3) }}
+              className="relative w-full bg-slate-900 rounded-xl overflow-hidden flex items-center justify-center"
+            >
               {/* Video element */}
               <video
                 ref={videoRef}
                 playsInline
                 autoPlay
                 muted
-                className={`w-full h-full object-cover transition-opacity duration-300 ${
+                onLoadedMetadata={syncVideoSize}
+                onResize={syncVideoSize}
+                className={`w-full h-full object-contain transition-opacity duration-300 ${
                   streamActive ? "opacity-100" : "opacity-0"
                 }`}
               />
@@ -327,20 +389,47 @@ export default function CameraKioskPage() {
                 </div>
               )}
 
-              {/* Reticle Oval Wajah Identik /students/enroll */}
+              {/* Reticle oval: ukuran dari GET /health (GUIDE_RX/RY di server) */}
               {streamActive && (
                 <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
                   <div
-                    className={`w-48 h-64 rounded-[50%] border-2 border-dashed transition-all duration-300 flex items-center justify-center ${
-                      lastResult?.match
-                        ? "border-emerald-400 shadow-[0_0_25px_rgba(16,185,129,0.4)]"
-                        : scanning
-                        ? "border-white shadow-[0_0_20px_rgba(255,255,255,0.3)] animate-pulse"
-                        : "border-white/60"
+                    style={{ width: `${ovalWidthPct}%`, height: `${ovalHeightPct}%` }}
+                    className={`rounded-[50%] border-2 transition-all duration-300 flex items-center justify-center ${
+                      scanning
+                        ? "border-amber-400 border-dashed shadow-[0_0_24px_rgba(251,191,36,0.45)] animate-pulse"
+                        : facePresent === true
+                        ? "border-emerald-400 border-solid shadow-[0_0_28px_rgba(16,185,129,0.45)]"
+                        : facePartial || faceOutside
+                        ? "border-rose-500 border-dashed shadow-[0_0_24px_rgba(244,63,94,0.4)] animate-pulse"
+                        : facePresent === false
+                        ? "border-rose-500 border-dashed shadow-[0_0_24px_rgba(244,63,94,0.4)]"
+                        : "border-white/60 border-dashed shadow-[0_0_20px_rgba(255,255,255,0.2)]"
                     }`}
                   >
-                    <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-black/60 text-white/90">
-                      Posisikan Wajah di Oval
+                    <span
+                      className={`text-[10px] font-semibold px-2 py-0.5 rounded-full text-white transition-colors ${
+                        scanning
+                          ? "bg-amber-600/85"
+                          : facePresent === true
+                          ? "bg-emerald-600/85"
+                          : facePartial || faceOutside
+                          ? "bg-rose-600/85"
+                          : facePresent === false
+                          ? "bg-rose-600/85"
+                          : "bg-black/60"
+                      }`}
+                    >
+                      {scanning
+                        ? "Memindai..."
+                        : facePresent === true
+                        ? "Wajah Terdeteksi — Siap Scan"
+                        : facePartial
+                        ? "Wajah Belum Utuh — Masuk ke Oval"
+                        : faceOutside
+                        ? "Wajah Di Luar Oval — Masuk ke Lingkaran"
+                        : facePresent === false
+                        ? "Wajah Tidak Terdeteksi"
+                        : "Posisikan Wajah di Oval"}
                     </span>
                   </div>
                 </div>
@@ -506,15 +595,23 @@ export default function CameraKioskPage() {
                   <XCircle className="w-6 h-6 text-rose-500 shrink-0 mt-0.5" />
                   <div className="flex-1 min-w-0">
                     <span className="text-[10px] font-bold uppercase tracking-wider text-rose-700">
-                      {lastResult.faces_detected === 0
+                      {lastResult.reason === "no_face" || lastResult.faces_detected === 0
                         ? "Wajah Tidak Terdeteksi"
+                        : lastResult.reason === "partial_face"
+                        ? "Wajah Belum Utuh — Ulangi"
+                        : lastResult.reason === "face_outside_oval"
+                        ? "Wajah Di Luar Oval — Ulangi"
                         : lastResult.reason === "ambiguous"
                         ? "Wajah Ambigu — Verifikasi Ulang"
                         : "Wajah Belum Terdaftar"}
                     </span>
                     <p className="text-xs text-aici-muted mt-1">
-                      {lastResult.faces_detected === 0
+                      {lastResult.reason === "no_face" || lastResult.faces_detected === 0
                         ? "Tidak ada wajah valid dalam frame kamera. Pastikan pencahayaan cukup dan wajah menghadap lurus."
+                        : lastResult.reason === "partial_face"
+                        ? "Sebagian wajah keluar dari frame. Posisikan seluruh wajah (dahi sampai dagu) di dalam oval, lalu pindai lagi."
+                        : lastResult.reason === "face_outside_oval"
+                        ? "Wajah terdeteksi tapi di luar lingkaran panduan. Geser hingga seluruh wajah masuk ke dalam oval, lalu pindai lagi."
                         : lastResult.reason === "ambiguous"
                         ? `Skor (${(lastResult.confidence * 100).toFixed(1)}%) terlalu dekat dengan 2 wajah. Mendekat ke kamera / perbaiki cahaya, lalu pindai lagi.`
                         : `Skor kemiripan (${(lastResult.confidence * 100).toFixed(1)}%) di bawah batas minimum (${lastResult.threshold_used}).`}

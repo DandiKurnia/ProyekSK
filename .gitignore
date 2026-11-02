@@ -17,3 +17,8 @@ dist/
 **/*.tsbuildinfo
 skills-lock.json
 **/skills-lock.json
+
+# Artefak kalibrasi lokal face-service (log tuning oval + skrip sekali pakai)
+*.log
+oval_log.csv
+test_aligned_crop.jpg
