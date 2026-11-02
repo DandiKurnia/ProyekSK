@@ -165,8 +165,6 @@ def oval_need(cx, cy, bw, bh, w, h):
     if rx <= 0 or ry <= 0:
         return 999.0
     return float(np.sqrt((dx / rx) ** 2 + (dy / ry) ** 2))  # Sudut terjauh = titik terburuk
-
-
 OVAL_LOG_PATH = os.path.join(BASE_DIR, "oval_log.csv")  # Kumpulan data fit oval
 OVAL_LOG_MAX_BYTES = 5 * 1024 * 1024  # Rotasi sekali: file lama -> .1 lalu mulai baru
 _OVAL_LOG_HEADER = "ts,cx,cy,bw,bh,coverage,oval_need,in_frame,in_guide,reason"

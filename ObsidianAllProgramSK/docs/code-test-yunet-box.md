@@ -40,6 +40,7 @@ import cv2
 
 import face_engine as fe  # pipeline YuNet yang sudah ada; tidak ada model baru di sini
 
+
 def draw_boxes(frame, faces):
     """Gambar kotak + skor tiap wajah; koordinat sudah dalam skala frame asli."""
     for i, face in enumerate(faces, start=1):
@@ -54,6 +55,7 @@ def draw_boxes(frame, faces):
 # Warna BGR; disamakan dengan oval di halaman /camera pada web.
 GREEN, RED = (0, 255, 0), (0, 0, 255)
 
+
 def status_of(frame, faces):
     """Hitung status yang sama dengan server /recognize:
     ok | face_outside_oval | partial_face | no_face
@@ -67,6 +69,7 @@ def status_of(frame, faces):
     if not q["in_guide"]:
         return "face_outside_oval", face
     return "ok", face
+
 
 def draw_status(frame, faces):
     """Tumpuk oval panduan + label status, mengikuti aturan server."""
@@ -94,12 +97,14 @@ def draw_status(frame, faces):
     )
     return status
 
+
 def report(faces):
     """Cetak koordinat tiap kotak ke terminal."""
     print(f"Wajah terdeteksi: {len(faces)}")
     for i, face in enumerate(faces, start=1):
         x, y, w, h = face[:4].astype(int)
         print(f"  #{i} x={x} y={y} w={w} h={h} skor={float(face[14]):.4f}")
+
 
 def parse_args():
     p = argparse.ArgumentParser(description="Uji bounding box YuNet")
@@ -120,6 +125,7 @@ def parse_args():
         help="resolusi kamera (default 1280x720, disamakan dengan constraint web /camera)",
     )
     return p.parse_args()
+
 
 def main():
     args = parse_args()
@@ -200,6 +206,7 @@ def main():
             needs = fit_oval.read_needs(fe.OVAL_LOG_PATH)
             res = fit_oval.fit(needs)
             fit_oval.write_engine(res["rx"], res["ry"])
+
 
 if __name__ == "__main__":
     main()
