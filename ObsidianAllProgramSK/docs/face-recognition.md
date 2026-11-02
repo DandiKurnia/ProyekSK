@@ -154,7 +154,7 @@ Pola on-demand (bukan tiap frame):
 ```
 Webcam → Capture (640x480) → YuNet @240px tiap frame → gambar box (selalu mulus)
   → [trigger: wajah baru / tombol v / API] → SFace 1x → cosine vs DB lokal
-  → Skor >= threshold → kunci kandidat → VERIFY serial ke ESP32 → POST hasil final ke Route Handler (sesi lokal 30 dtk)
+  → Skor >= threshold → kunci kandidat → buka sesi 2FA 30 dtk → terima MATCH dari ESP32 → POST hasil final ke Route Handler (1 POST per absensi)
   → Skor < threshold → "tak dikenal", tanpa pengiriman
 ```
 
@@ -166,7 +166,7 @@ Detail tahap:
 4. **Trigger verifikasi** — SFace jalan 1x hanya saat: wajah baru masuk (IoU < 0.3 vs box sebelumnya), label kedaluwarsa, atau panggilan API. Tidak ada embedding periodik tanpa trigger.
 5. **Compare** — cosine similarity vs seluruh embedding terdaftar, ambil tertinggi.
 6. **Threshold check** — lolos → kandidat; gagal → "tak dikenal".
-7. **Selesaikan 2FA lokal** — kandidat → `VERIFY` serial ke ESP32 via USB; hasil `MATCH`/`NO_MATCH`/`TIMEOUT` → 1 POST final ke Route Handler.
+7. **Selesaikan 2FA lokal** — kunci sesi (kandidat + slot target + TTL 30 dtk); terima event `MATCH <slot> <skor>` dari ESP32 (scan 1:N kontinu di firmware); cocok → 1 POST final ke Route Handler.
 
 ## Aturan Label / Anti-Stale (terverifikasi)
 
@@ -194,7 +194,7 @@ Bug yang ditemukan saat uji: label nama menempel global sehingga wajah berikutny
 
 ## Penyelesaian 2FA Lokal + Pengiriman Hasil Final
 
-Face service tidak mengirim kandidat mentah ke cloud. Ia memutus 2FA sendiri via USB Serial ke ESP32 (lihat [fingerprint.md](fingerprint.md)), lalu mengirim **1 hasil final** ke Route Handler:
+Face service tidak mengirim kandidat mentah ke cloud. Ia memutus 2FA sendiri dari event `MATCH` yang dikirim ESP32 (lihat [fingerprint.md](fingerprint.md)), lalu mengirim **1 hasil final** ke Route Handler:
 
 `POST /api/attendance` (HTTPS, kredensial perangkat):
 
@@ -325,8 +325,8 @@ flowchart TB
     E -- Ya --> F[SFace 1x + compare DB]
     F --> G{Skor >= threshold?}
     G -- Tidak --> Z
-    G -- Ya --> H[Kunci kandidat + VERIFY via USB Serial]
-    H --> I[Sesi lokal 30 dtk, POST final ke cloud]
+    G -- Ya --> H[Kunci sesi 2FA 30 dtk: kandidat + slot target]
+    H --> I[Siswa tempel jari, ESP32 kirim MATCH slot, cocokkan lalu POST final]
 ```
 
 ## Sequence Diagram
@@ -339,7 +339,8 @@ sequenceDiagram
     participant E as ESP32 R503
     W->>F: Frame (YuNet live)
     alt Skor >= threshold
-        F->>E: Serial VERIFY (USB, ms)
+        F->>F: Kunci sesi 2FA (kandidat + slot + TTL)
+        W->>E: Siswa tempel jari
         E-->>F: Serial MATCH slot + skor
         F->>B: POST hasil final 2FA
         B-->>F: Record tersimpan (present/late)

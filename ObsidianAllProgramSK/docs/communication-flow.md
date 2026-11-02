@@ -14,7 +14,7 @@
 
 | Rute | Protokol | Pemulai | Catatan |
 |---|---|---|---|
-| Face service ↔ ESP32 Fingerprint | USB Serial (`pyserial`, 115200 baud) | Face service | `VERIFY`/`ENROLL`/`DELETE`/`PING` → `MATCH`/`NO_MATCH`/`TIMEOUT`/`ERROR`; latensi ms |
+| Face service ↔ ESP32 Fingerprint | USB Serial (`pyserial`, 115200 baud) | Face service (perintah); ESP32 (event scan bebas) | perintah `PING`/`ENROLL <id>`/`DELETE <id>`/`CLEAR`/`LED_OK` → balasan `PONG`/`ENROLL_OK`/`ENROLL_FAIL`/`DELETE_OK`/`DELETE_FAIL`/`CLEAR_OK`/`LED_DONE` + event scan bebas `MATCH <id> <conf>`/`NOMATCH`/`PLACE`/`REMOVE`/`BOOT`/`READY`/`SENSOR_FAIL 0`; latensi ms |
 | Face service → Route Handler | HTTPS REST | Face service | 1 hasil final 2FA per absensi; retry saat gagal |
 | ESP32 Kursi → Route Handler | HTTPS POST berkala | ESP32 Kursi | Status kursi; interval di `app_config` |
 | Route Handler ↔ Supabase | Koneksi internal + Realtime | Keduanya | Bukan lewat internet publik |
@@ -26,13 +26,12 @@
 sequenceDiagram
     participant F as Face Service (PC)
     participant E as ESP32 + R503 (USB)
-    F->>E: VERIFY:5 (atau ENROLL:slot / DELETE:slot / PING)
-    E->>E: Kendalikan R503 via UART
-    E-->>F: MATCH:slot:skor / NO_MATCH / TIMEOUT / ERROR:kode
+    F->>E: Perintah bila perlu (PING / ENROLL slot / DELETE slot / CLEAR / LED_OK)
+    E->>E: Scan 1:N kontinu (tanpa perintah VERIFY)
+    E-->>F: Event: MATCH id conf / NOMATCH; saat enroll: PLACE / REMOVE / ENROLL_OK / FAIL
 ```
 
-- Terminator baris `\n`; timeout baca serial = timeout perintah + 1 detik.
-- Kabel lepas → `SerialException` → tandai `offline` lokal → auto-reconnect saat dicolok ulang.
+- Terminator baris `\n`; timeout baca serial = timeout perintah + 1 detik. Event scan bebas datang tanpa diminta: face service hanya menerima bila sesi 2FA aktif, selebihnya dibuang.
 - Detail perintah: [fingerprint.md](fingerprint.md).
 
 ### Face Service → Route Handler (Hasil Final)

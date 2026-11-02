@@ -10,9 +10,9 @@
 
 ## B. Enrollment Sidik Jari R503 (butuh hardware ESP32+R503)
 
-- [ ] **B1. Firmware `apps/fingerprint-esp32/`** (Arduino: parser `PING`/`ENROLL:<slot>`/`VERIFY:<t>`/`DELETE:<slot>`, balas `ENROLLED`/`MATCH`/`NO_MATCH`/`TIMEOUT`/`ERROR`). Spek: `docs/fingerprint.md` § protokol.
-- [ ] **B2. `apps/face-service/fingerprint_serial.py`** — buka COM port via `pyserial`, kirim perintah, tunggu respons dengan timeout.
-- [ ] **B3. Endpoint `server.py`: `POST /fingerprint/enroll {slot}`**, `POST /fingerprint/verify {slot}`, `DELETE /fingerprint/{slot}`.
+- [x] **B1. Firmware `esp32R503_Serial/esp32R503_Serial.ino`** — SELESAI (firmware v1.0, commit ini): parser `PING` / `ENROLL <id>` / `DELETE <id>` / `CLEAR` / `LED_OK`, event `MATCH <id> <conf>` / `NOMATCH` / `PLACE` / `REMOVE` / `ENROLL_OK` / `BOOT` / `READY` / `SENSOR_FAIL 0`. Scan 1:N kontinu, **tanpa** `VERIFY`. Spek sinkron di `docs/fingerprint.md`.
+- [ ] **B2. `apps/face-service/fingerprint_serial.py`** — buka COM port via `pyserial`, kirim perintah, tunggu respons dengan timeout; parser event sesuai firmware.
+- [ ] **B3. Endpoint `server.py`: `POST /fingerprint/enroll {slot}`**, `GET /fingerprint/status`, `DELETE /fingerprint/{slot}` — sesi 2FA 30 dtk dikelola di service (firmware tidak punya `VERIFY`).
 - [ ] **B4. Route Next.js `POST /api/fingerprint/enroll`** → teruskan ke `:8200`, lalu `UPDATE students SET fingerprint_slot, fingerprint_status='enrolled'`.
 - [ ] **B5. UI `/students/enroll` step 2** — tombol "Daftarkan Sidik Jari" + status `pending` + countdown + hasil slot. Hanya aktif setelah wajah `enrolled`.
 

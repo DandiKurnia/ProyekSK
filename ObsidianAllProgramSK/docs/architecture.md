@@ -41,8 +41,7 @@ Prinsip utama yang **MUST** dipatuhi:
 
 ## Hubungan Antarkomponen
 
-- Face service ↔ ESP32 Fingerprint: **USB Serial** (`pyserial`, COM port, 115200 baud). Face service selalu inisiator (`VERIFY:<student_id>`, `ENROLL:<student_id>:<slot>`); ESP32 menjawab (`MATCH:<slot>:<score>`, `NO_MATCH`, `TIMEOUT`, `ERROR:<sebab>`).
-- Face service → Route Handler: **HTTPS POST** 1 hasil final per absensi (outbound, tanpa port forwarding).
+- Face service ↔ ESP32 Fingerprint: **USB Serial** (`pyserial`, COM port, 115200 baud). Protokol baris: face service mengirim `PING`, `ENROLL <id>`, `DELETE <id>`, `CLEAR`, `LED_OK`. ESP32 terus memindai secara lokal (1:N) dan mengirim `MATCH <id> <confidence>`, `NOMATCH`, `PLACE <id>`, `REMOVE`. Tanpa perintah `VERIFY` di firmware: gerbang sesi 2FA (kandidat + slot target + TTL 30 dtk) dikelola sepenuhnya di face service. Sumber: `esp32R503_Serial/esp32R503_Serial.ino`.
 - ESP32 Kursi → Route Handler: **HTTPS POST** status berkala (Wi-Fi sekolah, outbound).
 - Route Handler ↔ Supabase: koneksi internal + Realtime (`postgres_changes`) ke dashboard.
 - Face service **MUST NOT** diekspos ke internet; hanya localhost/LAN kelas + port serial lokal.
@@ -80,11 +79,11 @@ sequenceDiagram
     participant W as Dashboard
     S->>F: Berdiri di depan webcam
     F->>F: YuNet live + SFace 1x + cocokkan
-    F->>E: Serial VERIFY (kandidat student_id)
+    F->>F: Buka sesi 2FA lokal 30 dtk (kandidat + slot target)
     S->>E: Tempel jari ke R503
-    E->>E: Cocokkan template lokal
-    E-->>F: Serial MATCH slot + skor / NO_MATCH / TIMEOUT
-    F->>F: Samakan wajah vs jari + TTL sesi 30 dtk
+    E->>E: Scan 1:N mandiri di firmware
+    E-->>F: Serial MATCH <slot> <skor> / NOMATCH
+    F->>F: Samakan wajah vs slot + cek TTL sesi
     F->>B: POST hasil final 2FA
     B->>D: INSERT attendance (cek duplikat)
     B->>W: Event Realtime attendance INSERT
@@ -93,9 +92,9 @@ sequenceDiagram
 ## Alur Normal
 
 1. Face service mengunci kandidat wajah (SFace 1x, anti-stale: IoU + TTL).
-2. Face service mengirim `VERIFY` via USB Serial; R503 menyala, siswa menempelkan jari.
-3. ESP32 mengembalikan `MATCH`/`NO_MATCH`/`TIMEOUT` via serial dalam milidetik.
-4. Face service menyamakan identitas wajah vs slot fingerprint + cek TTL sesi.
+2. Face service membuka sesi 2FA lokal 30 detik (kandidat + slot fingerprint target).
+3. Siswa menempelkan jari; ESP32 yang memindai terus-menerus mendeteksi jari dan mengirim `MATCH <slot> <skor>` via serial.
+4. Face service menyamakan identitas wajah vs slot fingerprint yang dilaporkan.
 5. Face service POST 1 hasil final ke Route Handler; cloud cek jadwal/duplikat, simpan.
 6. Dashboard menerima event Realtime dan memperbarui tampilan.
 

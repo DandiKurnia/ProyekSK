@@ -23,9 +23,9 @@ Pusat manajemen catatan absensi yang menyimpan seluruh history verifikasi biomet
 
 3. **Timeline Verifikasi per Sesi** (detail inspeksi):
    - Step 1: Face Detected (layanan lokal FastAPI).
-   - Step 2: Candidate Identified (student ID + confidence).
-   - Step 3: Fingerprint Requested (perintah serial `VERIFY` via USB ke ESP32, milidetik).
-   - Step 4: Fingerprint Verified (`MATCH` slot + skor via R503).
+   - Step 2: Face Recognized (SFace cocok dengan `student_id`, skor ≥ threshold).
+   - Step 3: Fingerprint Session Opened (sesi 2FA lokal 30 dtk dibuka di face service, menunggu jari).
+   - Step 4: Fingerprint Verified (`MATCH <slot> <skor>` diterima via USB Serial dari scan 1:N kontinu R503).
    - Step 5: Saving Attendance (Route Handler `POST /api/attendance` menyimpan hasil final 2FA ke Supabase).
    - Step 6: Status Final (`Present` / `Late` / `Failed` / `Expired`).
    - Tiap step memiliki timestamp; `session_id` terisi hanya pada fallback Wi-Fi (`NULL` pada insert langsung USB).

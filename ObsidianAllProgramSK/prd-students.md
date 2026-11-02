@@ -22,11 +22,13 @@ Manajemen data induk siswa dan orkestrasi enrollment biometrik dua faktor. Menu 
    - Step 5: Tersimpan & status `Enrolled`.
    - Tiap step memiliki status (`pending`, `running`, `success`, `failed`) dan pesan kegagalan bila ada.
 
-   - Step 1: Face service PC kelas langsung mengirim perintah serial `ENROLL:<slot>` via USB ke ESP32 (tanpa antrean cloud).
-   - Step 2: ESP32 meminta siswa menempelkan jari di R503 (1–2x).
-   - Step 3: Sensor membentuk template di slot numerik & mengembalikan `ENROLLED:<slot>`.
-   - Step 4: Face service memperbarui `fingerprint_slot` siswa via Route Handler (`PATCH /api/students/{id}`).
-   - Status live: countdown timeout sesi enrollment; atau `timeout` / `error` bila serial gagal.
+4. **Workflow Enrollment Fingerprint** (protokol serial dipisah spasi — sesuai firmware `esp32R503_Serial`):
+   - Step 1: Face service PC kelas langsung mengirim perintah serial `ENROLL <slot>` via USB ke ESP32 (tanpa antrean cloud).
+   - Step 2: ESP32 merespons `ENROLLING <slot>`, menyalakan ring biru, mengirim `PLACE <slot>` → siswa tempel jari ke R503.
+   - Step 3: ESP32 mengirim `REMOVE` (angkat jari), lalu `PLACE <slot>` (tempel sampel ke-2).
+   - Step 4: Sensor menggabungkan sampel & menyimpan ke slot Flash, mengembalikan `ENROLL_OK <slot> 0`.
+   - Step 5: Face service memperbarui `fingerprint_slot` siswa via Route Handler (`PATCH /api/students/{id}`).
+   - Status live: countdown timeout sesi enrollment (maks 15 dtk per sampel); atau `ENROLL_FAIL <slot> <kode>` bila gagal.
 
 5. **Riwayat Kehadiran per Siswa**:
    - Daftar record absensi historis: tanggal, check-in, status final (`Present`/`Late`/`Absent`/`Failed`).

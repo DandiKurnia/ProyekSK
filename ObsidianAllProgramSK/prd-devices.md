@@ -12,7 +12,7 @@ Monitoring kesehatan dan konektivitas perangkat: komputer kelas (FastAPI), ESP32
    - Contoh perangkat: `CLASS-A-FACE-01`, `CLASS-A-FP-01`, `CLASS-A-SEAT-01`.
 
 2. **Status Serial Fingerprint (pengganti Antrian Perintah)**:
-   - Status port COM (`COM5`/`/dev/ttyUSB0`), status koneksi (`connected`/`disconnected`), dan ringkasan VERIFY terakhir. Antrian cloud (`device_commands`, `command_id`) hanya aktif bila arsitektur memakai fallback Wi-Fi (`docs/archive/wifi-polling/`).
+   - Status port COM (`COM5`/`dev/ttyUSB0`), status koneksi (`connected`/`disconnected`), ringkasan event `MATCH` terakhir (`boot`/`ready`/`sensor_fail` termasuk). Antrian cloud (`device_commands`, `command_id`) hanya aktif bila arsitektur memakai fallback Wi-Fi (`docs/archive/wifi-polling/`).
 3. **Event Error Perangkat**:
    - Jenis: `no_match`, `timeout`, `sensor_error`, `connection_failed`.
    - Timestamp kejadian + detail penyebab (sesuai laporan perangkat).
