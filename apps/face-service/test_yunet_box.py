@@ -47,6 +47,21 @@ def status_of(frame, faces):
     return "ok", face
 
 
+def recognize_box(frame, face, db):
+    """Identitas 1 wajah: (nama|None, skor). DB kosong -> (None, -1.0)."""
+    if not db:
+        return None, -1.0
+    return fe.recognize(fe.embed(frame, face), db)  # SFace 1x per panggilan
+
+
+def draw_identity(frame, face, label):
+    """Tulis label identitas di atas kotak wajah."""
+    x, y = face[:2].astype(int)
+    cv2.putText(frame, label, (x, max(y - 26, 16)),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+    return frame
+
+
 def draw_status(frame, faces):
     """Tumpuk oval panduan + label status, mengikuti aturan server."""
     h, w = frame.shape[:2]
@@ -114,6 +129,11 @@ def main():
         report(faces)
         status = draw_status(frame, faces)
         print(f"status={status}")
+        if faces:
+            name, score = recognize_box(frame, fe.biggest(faces), fe.load_db())
+            label = f"{name} ({score:.2f})" if name else f"tak dikenal ({score:.2f})"
+            print(f"identitas: {label}")
+            draw_identity(frame, fe.biggest(faces), label)
         frame = draw_boxes(frame, faces)
         if args.save:
             os.makedirs(os.path.dirname(os.path.abspath(args.save)), exist_ok=True)
@@ -144,7 +164,10 @@ def main():
     if auto:
         print(f"Kumpul sample oval -> {fe.OVAL_LOG_PATH}. Posisikan wajah senyaman scanning, tekan q/ESC bila selesai.")
     try:
+        db = fe.load_db()                           # baca .npz sekali (tidak per frame)
         last = None                                 # status terakhir yang dicetak (hindari spam tiap frame)
+        label_box = None                            # kotak saat identitas terakhir dihitung
+        label = ""                                  # "nama (skor)" / "tak dikenal (skor)" / "DB kosong"
         while True:
             ok, frame = cap.read()
             if not ok:
@@ -155,7 +178,22 @@ def main():
                 x0, y0, bw0, bh0 = [float(v) for v in fe.biggest(faces)[:4]]
                 q0 = fe.face_quality(frame, fe.biggest(faces))
                 fe.log_oval((x0 + bw0 / 2) / w0, (y0 + bh0 / 2) / h0, bw0 / w0, bh0 / h0, q0, "live")
-            status = draw_status(frame, faces)
+            status, face = status_of(frame, faces)  # kotak terbesar + aturan oval
+            if status == "ok":                      # hanya wajah utuh di dalam oval yang dikenali
+                x, y, w, h = face[:4].astype(int)
+                current = (x, y, x + w, y + h)
+                if label_box is None or fe.box_iou(label_box, current) < 0.6:  # orang/pindah -> kenali ulang
+                    name, score = recognize_box(frame, face, db)
+                    label = f"{name} ({score:.2f})" if name else f"tak dikenal ({score:.2f})"
+                    label_box = current
+                    print(f"identitas: {label}")
+                if not db:
+                    label = "DB kosong"
+                draw_identity(frame, face, label)
+            else:                                   # wajah hilang/keluar oval -> label ikut reset
+                label_box = None
+                label = ""
+            draw_status(frame, faces)
             frame = draw_boxes(frame, faces)
             cv2.imshow("YuNet - status AI (ESC/q keluar)", frame)
             if status != last:                       # cetak hanya saat status berubah
