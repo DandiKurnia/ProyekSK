@@ -121,9 +121,11 @@ Keputusan: heuristik dihapus, field `glasses` dibuang dari response `POST /recog
 
 ### Validasi Posisi Wajah di Oval Panduan (Bounding Box Extent)
 
+Rincian angka piksel & lembar tanya-jawab sidang seputar resolusi → [tanya-jawab-piksel-dan-geometri-wajah.md](tanya-jawab-piksel-dan-geometri-wajah.md).
+
 Pengecekan apakah wajah berada di dalam oval panduan dihitung dari **seluruh kotak wajah (bounding box YuNet)**, bukan hanya titik tengahnya:
 - Keempat sudut kotak wajah harus berada di dalam elips panduan (`GUIDE_RX` dan `GUIDE_RY`).
-- Nilai `oval_need` merepresentasikan radius vertikal minimum yang dibutuhkan agar kotak wajah termuat penuh di oval dengan rasio tetap (0.8).
+- Nilai `oval_need` merepresentasikan radius minimum yang dibutuhkan agar kotak wajah termuat penuh di oval dengan rasio tetap `GUIDE_ASPECT = 0,75` (portrait 3:4, `GUIDE_RY = 0,350`).
 - Kalibrasi ukuran oval: jalankan `python test_yunet_box.py --oval-auto` selama ~10 detik. Saat keluar, skrip menghitung kuantil 95% dari distribusi `oval_need` dan otomatis memperbarui nilai `GUIDE_RX, GUIDE_RY` di `face_engine.py` (via `fit_oval.py`).
 - Komponen web di `/camera` mengambil nilai geometri oval secara dinamis dari endpoint `GET /health` sehingga UI klien dan server selalu seirama.
 - Wadah video web mengikuti rasio kamera aktual (`videoAspect`) dan `object-contain` (tanpa crop), sehingga proporsi oval FE 100% identik dengan koordinat Python. Gunakan flag `--size LxT` pada `test_yunet_box.py` bila ingin mengunci resolusi sama persis dengan stream browser.
@@ -293,7 +295,7 @@ Semua perintah dijalankan dari folder service (model ONNX dimuat dari `models/` 
 |---|---|---|---|
 | `face_engine.py` | **Mesin inti** — bukan skrip uji: `detect()` (YuNet), `embed()` (SFace), `recognize()` (cosine vs `.npz`), `guide_radii()`/`face_quality()` (aturan oval). Diimpor semua file di bawah | `import face_engine as fe` | [code-face-engine.md](code-face-engine.md) |
 | `server.py` | **Layanan produksi** — FastAPI `:8200` (`/health`, `/recognize`, `/enroll`, `DELETE /enroll/{id}`) | `python -m uvicorn server:app --port 8200` | — (belum disalin; minta bila perlu) |
-| `test_yunet_box.py` | **Uji bounding box** — gambar kotak `[x,y,w,h]` + skor ke-14 YuNet + oval + label status (`ok`/`face_outside_oval`/`partial_face`/`no_face`) | `python test_yunet_box.py [--image foto.jpg --save keluar.jpg] [--size LxT]` | [code-test-yunet-box.md](code-test-yunet-box.md) |
+| `test_yunet_box.py` | **Uji bounding box** — gambar kotak `[x,y,w,h]` + skor ke-14 YuNet + oval + label status (`ok`/`face_outside_oval`/`partial_face`/`no_face`). Bedah per-fungsi & angka piksel terukur → [tanya-jawab-piksel-dan-geometri-wajah.md](tanya-jawab-piksel-dan-geometri-wajah.md) | `python test_yunet_box.py [--image foto.jpg --save keluar.jpg] [--size LxT]` | [code-test-yunet-box.md](code-test-yunet-box.md) |
 | `test_sface_points.py` | **Uji embedding** — gambar 5 landmark → `alignCrop` 112x112 → cetak vektor 128-d + cosine ke `.npz` | `python test_sface_points.py --image foto.jpg [--save keluar.jpg] [--clean] [--compare]` | — (belum disalin; minta bila perlu) |
 | `fit_oval.py` | **Kalibrasi oval** — hitung `p95(oval_need)` dari `oval_log.csv` → usulan `GUIDE_RY` baru; `--write` menimpa `face_engine.py` | `python fit_oval.py` (pratinjau) · `python fit_oval.py --write` (tulis) | — (belum disalin; minta bila perlu) |
 | `main.py` | **Uji keyboard interaktif** — YuNet tiap frame, SFace hanya saat tombol: `v`=verify · `e`=enroll · `c`=hapus label · `q`=keluar | `python main.py` (butuh webcam + jendela GUI) | [code-main-py.md](code-main-py.md) |

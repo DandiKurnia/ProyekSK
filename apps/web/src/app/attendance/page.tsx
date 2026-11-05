@@ -39,145 +39,80 @@ interface AttendanceRow {
   is_live?: boolean;
 }
 
-const MOCK_ROWS: AttendanceRow[] = [
-  {
-    id: "sess-9921",
-    time: "06:54:12.804",
-    student_id: "AICI-2026-001",
-    full_name: "Ahmad Rizky Pratama",
-    class_name: "AI Eng - B3",
-    face_confidence: 0.94,
-    fingerprint_slot: 12,
-    status: "Present",
-    is_live: true,
-  },
-  {
-    id: "sess-9920",
-    time: "07:14:02.119",
-    student_id: "AICI-2026-042",
-    full_name: "Siti Nurhaliza",
-    class_name: "AI Eng - B3",
-    face_confidence: 0.91,
-    fingerprint_slot: 8,
-    status: "Late",
-  },
-  {
-    id: "sess-9919",
-    time: "07:28:44.002",
-    student_id: "AICI-2026-088",
-    full_name: "Kevin Sanjaya",
-    class_name: "AI Eng - B3",
-    face_confidence: 0.96,
-    fingerprint_slot: null,
-    fingerprint_label: "Menunggu Touch ...",
-    status: "Pending",
-    status_label: "Pending (18s)",
-  },
-  {
-    id: "sess-9918",
-    time: "07:05:11.450",
-    student_id: "AICI-2026-015",
-    full_name: "Dimas Wicaksono",
-    class_name: "AI Eng - B3",
-    face_confidence: 0.42,
-    fingerprint_slot: 19,
-    status: "Failed",
-  },
-  {
-    id: "sess-9917",
-    time: "06:58:30.000",
-    student_id: "AICI-2026-031",
-    full_name: "Rania Putri",
-    class_name: "AI Eng - B3",
-    face_confidence: 0.89,
-    fingerprint_slot: null,
-    fingerprint_label: ">60s Timeout",
-    status: "Expired",
-  },
-  {
-    id: "sess-9916",
-    time: "07:30:00.000",
-    student_id: "AICI-2026-059",
-    full_name: "Farhan Maulana",
-    class_name: "AI Eng - B3",
-    face_confidence: null,
-    fingerprint_slot: null,
-    status: "Absent",
-  },
-];
-
 export default function AttendancePage() {
-  const [classes, setClasses] = useState<ClassOption[]>([
-    { class_id: "ai-eng-b3", name: "AI Engineering Batch 3" },
-    { class_id: "XII-RPL-1", name: "XII RPL 1" },
-  ]);
-  const [activeClassId, setActiveClassId] = useState<string>("ai-eng-b3");
-  const [date, setDate] = useState<string>("2026-10-24");
+  // Live-only: tanpa mock. API mengembalikan classes + rows sesuai DB.
+  const todayId = () =>
+    new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Jakarta" }).format(new Date());
+  const [classes, setClasses] = useState<ClassOption[]>([]);
+  const [activeClassId, setActiveClassId] = useState<string>("");
+  const [date, setDate] = useState<string>(todayId);
   const [search, setSearch] = useState("");
-  const [rows, setRows] = useState<AttendanceRow[]>(MOCK_ROWS);
-  const [totalCount, setTotalCount] = useState(142);
+  const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [rows, setRows] = useState<AttendanceRow[]>([]);
+  const [totalCount, setTotalCount] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [totalPages, setTotalPages] = useState(1);
   const [page, setPage] = useState(1);
+  const [limit, setLimit] = useState(20);
   const [selectedRow, setSelectedRow] = useState<AttendanceRow | null>(null);
 
   const loadData = useCallback(async () => {
     setLoading(true);
+    setLoadError(null);
     try {
-      const res = await fetch(
-        `/api/attendance?class_id=${encodeURIComponent(
-          activeClassId
-        )}&date=${encodeURIComponent(date)}&search=${encodeURIComponent(
-          search
-        )}&page=${page}&limit=20`
-      );
+      const q = new URLSearchParams({
+        ...(activeClassId ? { class_id: activeClassId } : {}),
+        date,
+        search,
+        status: statusFilter,
+        page: String(page),
+        limit: String(limit),
+      });
+      const res = await fetch(`/api/attendance?${q.toString()}`);
       if (!res.ok) throw new Error("Gagal mengambil data");
-      const d = await res.json();
-      if (d.classes && d.classes.length > 0) {
-        setClasses(d.classes);
-      }
-      if (d.rows && d.rows.length > 0) {
-        setRows(
-          d.rows.map(
-            (r: {
-              id: string;
-              time: string;
-              student_id: string;
-              full_name: string;
-              class_name: string;
-              face_confidence: number | null;
-              fingerprint_slot: number | null;
-              status: string;
-            }) => {
-              const capStatus = (r.status.charAt(0).toUpperCase() +
-                r.status.slice(1)) as AttendanceRow["status"];
-              return {
-                id: r.id,
-                time: r.time.includes("T")
-                  ? r.time.split("T")[1]?.slice(0, 12) ?? r.time
-                  : r.time,
-                student_id: r.student_id,
-                full_name: r.full_name,
-                class_name: r.class_name,
-                face_confidence: r.face_confidence,
-                fingerprint_slot: r.fingerprint_slot,
-                status: capStatus,
-              };
-            }
-          )
-        );
-        setTotalCount(d.total);
-      } else {
-        // Fallback ke mock data agar tampilan persis design/Attendance.png saat DB belum terisi
-        setRows(MOCK_ROWS);
-        setTotalCount(142);
-      }
-    } catch {
-      setRows(MOCK_ROWS);
-      setTotalCount(142);
+      const d = (await res.json()) as {
+        classes?: ClassOption[];
+        class_id?: string;
+        totalPages?: number;
+        rows?: {
+          id: string;
+          time: string;
+          student_id: string;
+          full_name: string;
+          class_name: string;
+          face_confidence: number | null;
+          fingerprint_slot: number | null;
+          status: string;
+        }[];
+        total?: number;
+      };
+      if (d.classes?.length) setClasses(d.classes);
+      if (!activeClassId && d.class_id) setActiveClassId(d.class_id);
+      setRows(
+        (d.rows ?? []).map((r) => ({
+          id: r.id,
+          time: r.time.includes("T") ? (r.time.split("T")[1]?.slice(0, 12) ?? r.time) : r.time,
+          student_id: r.student_id,
+          full_name: r.full_name,
+          class_name: r.class_name,
+          face_confidence: r.face_confidence,
+          fingerprint_slot: r.fingerprint_slot,
+          status: (r.status.charAt(0).toUpperCase() + r.status.slice(1)) as AttendanceRow["status"],
+        }))
+      );
+      setTotalCount(d.total ?? 0);
+      setTotalPages(Math.max(1, d.totalPages ?? 1));
+    } catch (err: unknown) {
+      setRows([]);
+      setTotalCount(0);
+      setTotalPages(1);
+      setLoadError(err instanceof Error ? err.message : "Gagal mengambil data");
     } finally {
       setLoading(false);
     }
-  }, [activeClassId, date, search, page]);
+  }, [activeClassId, date, search, statusFilter, page, limit]);
+
 
   useEffect(() => {
     loadData();
@@ -278,6 +213,26 @@ export default function AttendancePage() {
                 ▾
               </span>
             </div>
+            {/* Status Dropdown */}
+            <div className="relative">
+              <select
+                value={statusFilter}
+                onChange={(e) => {
+                  setStatusFilter(e.target.value);
+                  setPage(1);
+                }}
+                className="appearance-none bg-aici-surface border border-aici-border rounded-xl px-4 py-2 pr-8 text-xs font-semibold text-aici-dark cursor-pointer outline-none hover:bg-aici-surface-nested"
+              >
+                <option value="all">Semua Status</option>
+                <option value="present">Present</option>
+                <option value="late">Late</option>
+                <option value="failed">Failed</option>
+                <option value="expired">Expired</option>
+              </select>
+              <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-aici-muted">
+                ▾
+              </span>
+            </div>
 
             {/* Date Picker */}
             <label className="flex items-center gap-2 bg-aici-surface border border-aici-border rounded-xl px-4 py-2 text-xs font-semibold text-aici-dark cursor-pointer hover:bg-aici-surface-nested">
@@ -334,6 +289,26 @@ export default function AttendancePage() {
                 log sesi hari ini
               </div>
             </div>
+            {loadError && (
+              <div className="mb-4 p-3 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-700 flex items-center justify-between gap-3">
+                <span>{loadError}</span>
+                <button
+                  onClick={loadData}
+                  className="px-3 py-1 rounded-lg bg-rose-600 text-white font-semibold hover:bg-rose-700"
+                >
+                  Coba lagi
+                </button>
+              </div>
+            )}
+            {!loading && !loadError && filteredRows.length === 0 && (
+              <div className="py-12 flex flex-col items-center justify-center text-center text-aici-muted gap-2">
+                <ScanFace className="w-10 h-10 text-aici-muted stroke-[1.5]" />
+                <p className="text-sm font-bold text-aici-dark">Belum ada catatan pada {date}</p>
+                <p className="text-[11px] max-w-xs">
+                  Belum ada hasil verifikasi 2FA hari ini. Ubah tanggal/filter atau lakukan scan di halaman Check-in.
+                </p>
+              </div>
+            )}
 
             {/* Mobile Card List (< md) */}
             <div className="md:hidden divide-y divide-aici-border/50">
@@ -605,7 +580,11 @@ export default function AttendancePage() {
               <div className="flex items-center gap-2">
                 <span>Baris per halaman:</span>
                 <select
-                  defaultValue="20"
+                  value={limit}
+                  onChange={(e) => {
+                    setLimit(Number(e.target.value));
+                    setPage(1);
+                  }}
                   className="bg-aici-surface-nested border border-aici-border rounded-lg px-2.5 py-1 font-semibold text-aici-dark outline-none cursor-pointer"
                 >
                   <option value="10">10</option>
@@ -615,13 +594,14 @@ export default function AttendancePage() {
               </div>
 
               <div className="flex items-center gap-1 font-medium">
-                <span>Halaman {page} dari 24</span>
+                <span>Halaman {page} dari {totalPages}</span>
               </div>
 
               <div className="flex items-center gap-1">
                 <button
                   disabled={page <= 1}
                   onClick={() => setPage(1)}
+                  aria-label="Halaman awal"
                   className="w-7 h-7 flex items-center justify-center rounded-lg border border-aici-border hover:bg-aici-surface-nested disabled:opacity-40"
                 >
                   <ChevronsLeft className="w-3.5 h-3.5" />
@@ -629,43 +609,29 @@ export default function AttendancePage() {
                 <button
                   disabled={page <= 1}
                   onClick={() => setPage((p) => Math.max(1, p - 1))}
+                  aria-label="Halaman sebelumnya"
                   className="w-7 h-7 flex items-center justify-center rounded-lg border border-aici-border hover:bg-aici-surface-nested disabled:opacity-40"
                 >
                   <ChevronLeft className="w-3.5 h-3.5" />
                 </button>
 
-                <button className="w-7 h-7 flex items-center justify-center rounded-lg bg-[#1E293B] text-white font-semibold text-xs">
-                  1
-                </button>
-                <button
-                  onClick={() => setPage(2)}
-                  className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-aici-surface-nested text-xs text-aici-dark"
-                >
-                  2
-                </button>
-                <button
-                  onClick={() => setPage(3)}
-                  className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-aici-surface-nested text-xs text-aici-dark"
-                >
-                  3
-                </button>
-                <span className="px-1 text-aici-muted">...</span>
-                <button
-                  onClick={() => setPage(24)}
-                  className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-aici-surface-nested text-xs text-aici-dark"
-                >
-                  24
-                </button>
+                <span className="px-2 py-1 text-xs font-semibold text-aici-dark">
+                  {page} / {totalPages}
+                </span>
 
                 <button
-                  onClick={() => setPage((p) => Math.min(24, p + 1))}
-                  className="w-7 h-7 flex items-center justify-center rounded-lg border border-aici-border hover:bg-aici-surface-nested"
+                  disabled={page >= totalPages}
+                  onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                  aria-label="Halaman berikutnya"
+                  className="w-7 h-7 flex items-center justify-center rounded-lg border border-aici-border hover:bg-aici-surface-nested disabled:opacity-40"
                 >
                   <ChevronRight className="w-3.5 h-3.5" />
                 </button>
                 <button
-                  onClick={() => setPage(24)}
-                  className="w-7 h-7 flex items-center justify-center rounded-lg border border-aici-border hover:bg-aici-surface-nested"
+                  disabled={page >= totalPages}
+                  onClick={() => setPage(totalPages)}
+                  aria-label="Halaman akhir"
+                  className="w-7 h-7 flex items-center justify-center rounded-lg border border-aici-border hover:bg-aici-surface-nested disabled:opacity-40"
                 >
                   <ChevronsRight className="w-3.5 h-3.5" />
                 </button>

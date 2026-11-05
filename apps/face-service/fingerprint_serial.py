@@ -198,7 +198,13 @@ class FingerprintBridge:
         slot = _int(args, 0, -1)
         score = _int(args, 1, 0)
         if slot == s["slot"]:
-            s.update(state="verified", matched_slot=slot, score=score, reason="ok")
+            s.update(
+                state="verified",
+                matched_slot=slot,
+                score=score,
+                reason="ok",
+                verified_at=time.time(),  # dipakai Route Handler untuk batas umur bukti 2FA
+            )
             return
 
         # Wajah siswa A tetapi jari slot lain (milik siswa B)
@@ -324,7 +330,8 @@ class FingerprintBridge:
 
     def cancel_session(self) -> dict:
         with self._lock:
-            if self._session.get("state") == "waiting":
+            if self._session.get("state") in ("waiting", "verified"):
+                # `verified` ikut dikonsumsi supaya bukti 2FA tidak bisa dipakai dua kali
                 self._session = {**self._session, "state": "cancelled", "reason": "cancelled"}
             self._new.notify_all()
             return dict(self._session)

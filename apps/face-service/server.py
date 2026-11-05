@@ -338,7 +338,7 @@ def fingerprint_enroll_status():
 
 
 # --- ENDPOINT 8: HAPUS SLOT SIDIK JARI ---
-@app.delete("/fingerprint/{slot}")
+@app.delete("/fingerprint/{slot:int}")
 def fingerprint_delete(slot: int):
     if not 1 <= slot <= 200:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="slot harus 1..200")
@@ -368,3 +368,10 @@ def fingerprint_session_get():
 @app.delete("/fingerprint/session")
 def fingerprint_session_cancel():
     return fp.bridge.cancel_session()
+
+
+# --- ENDPOINT LED: KONFIRMASI FISIK SETELAH ABSENSI TERCATAT ---
+@app.post("/fingerprint/led")
+def fingerprint_led():
+    """Kedip hijau di R503. Dipanggil Route Handler setelah baris attendance tersimpan."""
+    return fp.bridge.led_ok()

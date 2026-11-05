@@ -20,7 +20,10 @@ class FakeSerial:
         self._q.put(line)
 
     def write(self, b: bytes) -> None:
-        self.written.append(b.decode().strip())
+        cmd = b.decode().strip()
+        self.written.append(cmd)
+        if cmd.startswith("LED_OK"):
+            threading.Timer(0.05, lambda: self.feed("LED_DONE")).start()
 
     def flush(self) -> None:
         pass
@@ -182,7 +185,16 @@ def check_api():
         time.sleep(0.3)
         sess = c.get("/fingerprint/session").json()
         print("session final:", sess["state"], "score:", sess["score"])
-        assert sess["state"] == "verified" and sess["score"] == 128
+        assert sess["state"] == "verified" and sess["score"] == 128 and sess.get("verified_at")
+
+        # 3. LED konfirmasi: firmware balas LED_DONE
+        r = c.post("/fingerprint/led", json={})
+        print("led:", r.status_code, r.json())
+        assert r.status_code == 200 and r.json().get("ok") is True
+
+        # 4. Konsumsi sesi: verified -> cancelled, tidak bisa dipakai ulang
+        assert c.delete("/fingerprint/session").json()["state"] == "cancelled"
+        assert c.get("/fingerprint/session").json()["state"] == "cancelled"
 
         # 3. Delete slot
         def del_reply():

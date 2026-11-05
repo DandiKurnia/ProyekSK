@@ -71,11 +71,15 @@ export default function CameraKioskPage() {
   interface TwoFa {
     state: "waiting" | "verified" | "failed" | "expired" | "error";
     message?: string;
+    /** Hasil POST /api/attendance setelah 2FA lolos (null = sedang mencatat / gagal dicatat). */
+    record?: { status: string; check_in_at: string } | null;
+    recordError?: string;
   }
 
   // --- 2FA: wajah cocok -> buka sesi tunggu sidik jari (max 1 sesi per wajah) ---
   const [twofa, setTwofa] = useState<TwoFa | null>(null);
   const twofaFor = useRef<string | null>(null); // student_id sesi yang sedang aktif
+  const twofaDone = useRef<{ id: string; at: number }>({ id: "", at: 0 }); // cooldown scan-ulang pasca 2FA
   const twofaPoll = useRef<number | null>(null);
   useEffect(
     () => () => {
@@ -83,9 +87,22 @@ export default function CameraKioskPage() {
     },
     []
   );
+  // Auto-reset kiosk setelah 2FA selesai (verified/failed/expired) supaya siswa berikutnya bisa langsung scan
+  useEffect(() => {
+    if (!twofa || !["verified", "failed", "expired"].includes(twofa.state)) return;
+    const t = window.setTimeout(() => {
+      setLastResult(null);
+      setTwofa(null);
+      twofaFor.current = null;
+    }, 3500);
+    return () => window.clearTimeout(t);
+  }, [twofa?.state]);
+
 
   const startTwoFa = useCallback(async (studentId: string, slot: number) => {
     if (twofaFor.current === studentId) return; // auto-scan kirim frame tiap 1.8 dtk: jangan buka sesi ganda
+    // Siswa yang baru selesai 2FA masih di depan kamera -> jangan buka sesi baru (LED/absensi berulang)
+    if (twofaDone.current.id === studentId && Date.now() - twofaDone.current.at < 30000) return;
     twofaFor.current = studentId;
     setTwofa({ state: "waiting" });
     try {
@@ -104,13 +121,39 @@ export default function CameraKioskPage() {
     twofaPoll.current = window.setInterval(async () => {
       try {
         const r = await fetch("/api/fingerprint/session", { cache: "no-store" });
-        const s = await r.json();
-        if (s.state !== "waiting") {
+        const s = (await r.json()) as { state?: string; reason?: string };
+        if (s.state && s.state !== "waiting") {
           window.clearInterval(twofaPoll.current!);
           twofaPoll.current = null;
           twofaFor.current = null;
+          const termState = s.state as TwoFa["state"];
+          twofaDone.current = { id: studentId, at: Date.now() };
+          if (termState === "verified" || termState === "failed" || termState === "expired") {
+            try {
+              const a = await fetch("/api/attendance", {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ student_id: studentId }),
+              });
+              const rec = (await a.json()) as { status?: string; check_in_at?: string; error?: string };
+              setTwofa(
+                a.ok && rec.status
+                  ? { state: termState, message: s.reason, record: { status: rec.status, check_in_at: rec.check_in_at ?? "" } }
+                  : { state: termState, message: s.reason, recordError: rec.error ?? `HTTP ${a.status}` }
+              );
+            } catch (err: unknown) {
+              setTwofa({
+                state: termState,
+                message: s.reason,
+                recordError: err instanceof Error ? err.message : "gagal mencatat",
+              });
+            }
+          } else {
+            setTwofa({ state: termState, message: s.reason });
+          }
+        } else if (s.state) {
+          setTwofa({ state: s.state as TwoFa["state"] });
         }
-        setTwofa({ state: s.state, message: s.reason });
       } catch {
         // Jaringan putus sesaat: polling berikutnya mencoba lagi
       }
@@ -667,6 +710,16 @@ export default function CameraKioskPage() {
                         <p className="text-[11px] text-blue-900/70 mt-1 leading-relaxed">
                           Tempelkan jari pada sensor <strong>R503</strong> di bawah webcam untuk menyelesaikan
                           2FA.
+                        </p>
+                      )}
+                      {twofa?.record && (
+                        <p className="text-[11px] text-emerald-800 font-semibold mt-1">
+                          Tercatat di server: <span className="uppercase">{twofa.record.status}</span> ({new Date(twofa.record.check_in_at).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" })})
+                        </p>
+                      )}
+                      {twofa?.recordError && (
+                        <p className="text-[11px] text-rose-700 mt-1">
+                          Gagal mencatat: {twofa.recordError}
                         </p>
                       )}
                     </div>
