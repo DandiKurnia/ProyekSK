@@ -522,19 +522,24 @@ export default function StudentFaceEnrollPage() {
 
                   {/* Reticle oval: ukuran dari GET /health (GUIDE_RX/RY di server) */}
                   {streamActive && (
-                    <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
+                    <div className="absolute inset-0 pointer-events-none">
                       <div
                         style={{ width: `${ovalWidthPct}%`, height: `${ovalHeightPct}%` }}
-                        className={`rounded-[50%] border-2 transition-all duration-300 flex items-center justify-center ${
+                        className={`absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-[50%] border-2 transition-all duration-300 ${
                           facePresent === true
                             ? "border-emerald-400 border-solid shadow-[0_0_28px_rgba(16,185,129,0.45)]"
                             : facePresent === false
                             ? "border-rose-500 border-dashed shadow-[0_0_24px_rgba(244,63,94,0.4)]"
                             : "border-white/60 border-dashed shadow-[0_0_20px_rgba(255,255,255,0.2)]"
                         }`}
+                      />
+                      {/* Label di luar oval (bawah) agar tidak menutupi wajah */}
+                      <div
+                        className="absolute left-1/2 -translate-x-1/2 flex justify-center"
+                        style={{ top: `calc(50% + ${ovalHeightPct / 2}% + 8px)` }}
                       >
                         <span
-                          className={`text-[10px] font-semibold px-2 py-0.5 rounded-full text-white transition-colors ${
+                          className={`text-[10px] font-semibold px-2 py-0.5 rounded-full text-white whitespace-nowrap transition-colors ${
                             facePresent === true
                               ? "bg-emerald-600/85"
                               : facePresent === false
