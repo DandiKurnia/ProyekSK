@@ -105,7 +105,7 @@ export async function POST(request: Request) {
 // Urutan: purge embedding .npz -> hapus riwayat attendance -> hapus baris induk.
 // Bila face-service tidak bisa memastikan embedding terhapus, batalkan supaya
 // tidak ada wajah yatim yang masih ikut dicocokkan oleh /recognize.
-const FACE_URL = process.env.FACE_SERVICE_URL ?? "http://127.0.0.1:8200";
+const FACE_URL = process.env.FACE_SERVICE_URL ?? "http://127.0.0.1:8000";
 
 export async function DELETE(request: Request) {
   try {

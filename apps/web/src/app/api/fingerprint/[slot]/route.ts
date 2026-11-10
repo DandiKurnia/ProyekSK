@@ -4,7 +4,7 @@ import { supabaseServer } from "@/lib/supabase-server";
 // Hapus template dari sensor fisik + setel fingerprint_status='not_enrolled' & slot=NULL di DB.
 export const dynamic = "force-dynamic";
 
-const FACE_URL = process.env.FACE_SERVICE_URL ?? "http://127.0.0.1:8200";
+const FACE_URL = process.env.FACE_SERVICE_URL ?? "http://127.0.0.1:8000";
 
 export async function DELETE(
   request: Request,

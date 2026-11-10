@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 // 503 bila kabel/port belum terhubung agar UI menampilkan banner masalah hardware, bukan nilai nol.
 export const dynamic = "force-dynamic";
 
-const FACE_URL = process.env.FACE_SERVICE_URL ?? "http://127.0.0.1:8200";
+const FACE_URL = process.env.FACE_SERVICE_URL ?? "http://127.0.0.1:8000";
 
 export async function GET() {
   try {

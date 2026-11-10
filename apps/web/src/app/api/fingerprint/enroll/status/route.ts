@@ -5,7 +5,7 @@ import { supabaseServer } from "@/lib/supabase-server";
 // re_enroll=0 -> slot dialokasikan request ini, jadi bila gagal slot dibersihkan (rollback A3).
 export const dynamic = "force-dynamic";
 
-const FACE_URL = process.env.FACE_SERVICE_URL ?? "http://127.0.0.1:8200";
+const FACE_URL = process.env.FACE_SERVICE_URL ?? "http://127.0.0.1:8000";
 
 export async function GET(request: Request) {
   try {

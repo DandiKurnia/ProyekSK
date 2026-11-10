@@ -178,7 +178,7 @@ export default function CameraKioskPage() {
         error:
           err instanceof Error
             ? err.message
-            : "Service FastAPI lokal belum aktif (:8200)",
+            : "Service FastAPI lokal belum aktif",
       });
     }
   }, [setOvalFrom]);

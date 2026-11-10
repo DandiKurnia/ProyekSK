@@ -1,10 +1,10 @@
 """FastAPI local service untuk face recognition (YuNet + SFace).
 
-Jalan di komputer kelas lokal (port 8200). Hanya diakses localhost/LAN kelas.
+Jalan di komputer kelas lokal (port 8000). Hanya diakses localhost/LAN kelas.
 Contract PRD: ObsidianAllProgramSK/docs/face-recognition.md
 
 Jalankan:
-  uvicorn server:app --app-dir apps/face-service --host 127.0.0.1 --port 8200
+  uvicorn server:app --app-dir apps/face-service --host 127.0.0.1 --port 8000
 """
 
 # --- IMPORT LIBRARY ---
@@ -14,7 +14,7 @@ from typing import List, Optional  # Tipe untuk validasi skema request/response
 import cv2  # OpenCV: ubah byte gambar jadi matriks piksel BGR
 import numpy as np  # NumPy: tampung byte mentah sebelum didecode OpenCV
 from fastapi import FastAPI, HTTPException, status  # Framework API + kode error HTTP (400/404/422)
-from fastapi.middleware.cors import CORSMiddleware  # Izinkan browser akses lintas port (3000 -> 8200)
+from fastapi.middleware.cors import CORSMiddleware  # Izinkan browser akses lintas port (3000 -> 8000)
 from pydantic import BaseModel, Field  # Validasi otomatis body JSON + dokumentasi Swagger
 
 import face_engine as fe  # Modul visi lokal: YuNet detect, SFace embed, cosine match, baca/tulis .npz

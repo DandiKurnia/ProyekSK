@@ -421,12 +421,12 @@ export default function StudentFaceEnrollPage() {
               {serviceOnline ? (
                 <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-semibold text-[11px]">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                  Service FastAPI :8200 Siap
+                  Service FastAPI Siap
                 </span>
               ) : (
                 <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-rose-50 text-rose-700 border border-rose-200 font-semibold text-[11px]">
                   <AlertCircle className="w-3.5 h-3.5" />
-                  FastAPI Offline (:8200)
+                  FastAPI Offline
                 </span>
               )}
               <button

@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 
 // Proxy server-to-server ke face-service lokal (YuNet + SFace).
-// Browser tidak langsung hit :8200 agar bebas masalah CORS/origin.
-const FACE_URL = process.env.FACE_SERVICE_URL ?? "http://127.0.0.1:8200";
+// Browser tidak langsung hit face-service agar bebas masalah CORS/origin.
+const FACE_URL = process.env.FACE_SERVICE_URL ?? "http://127.0.0.1:8000";
 
 export async function GET() {
   try {

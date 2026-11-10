@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 // Buka jendela 2FA lokal saat wajah terkunci.
 export const dynamic = "force-dynamic";
 
-const FACE_URL = process.env.FACE_SERVICE_URL ?? "http://127.0.0.1:8200";
+const FACE_URL = process.env.FACE_SERVICE_URL ?? "http://127.0.0.1:8000";
 
 export async function POST(request: Request) {
   try {

@@ -2,10 +2,10 @@ import { NextResponse } from "next/server";
 import { supabaseServer } from "@/lib/supabase-server";
 // POST /api/face/enroll { student_id, images_base64[] }
 // Operasi DESTUKTIF (re-enroll menimpa data lama) — hanya untuk operator.
-// Diteruskan ke POST :8200/enroll (contract: prd-students.md §3).
+// Diteruskan ke POST /enroll face-service (contract: prd-students.md §3).
 export const dynamic = "force-dynamic";
 
-const FACE_URL = process.env.FACE_SERVICE_URL ?? "http://127.0.0.1:8200";
+const FACE_URL = process.env.FACE_SERVICE_URL ?? "http://127.0.0.1:8000";
 
 export async function POST(request: Request) {
   try {

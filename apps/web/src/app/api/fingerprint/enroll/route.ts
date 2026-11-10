@@ -5,7 +5,7 @@ import { supabaseServer } from "@/lib/supabase-server";
 // Balik { started, slot, re_enroll } agar polling status tahu apakah slot baru/total menimpa.
 export const dynamic = "force-dynamic";
 
-const FACE_URL = process.env.FACE_SERVICE_URL ?? "http://127.0.0.1:8200";
+const FACE_URL = process.env.FACE_SERVICE_URL ?? "http://127.0.0.1:8000";
 const MAX_SLOT = 200;
 
 export async function POST(request: Request) {

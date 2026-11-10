@@ -294,7 +294,7 @@ Semua perintah dijalankan dari folder service (model ONNX dimuat dari `models/` 
 | File | Fungsi | Perintah | Salinan Kode |
 |---|---|---|---|
 | `face_engine.py` | **Mesin inti** — bukan skrip uji: `detect()` (YuNet), `embed()` (SFace), `recognize()` (cosine vs `.npz`), `guide_radii()`/`face_quality()` (aturan oval). Diimpor semua file di bawah | `import face_engine as fe` | [code-face-engine.md](code-face-engine.md) |
-| `server.py` | **Layanan produksi** — FastAPI `:8200` (`/health`, `/recognize`, `/enroll`, `DELETE /enroll/{id}`) | `python -m uvicorn server:app --port 8200` | — (belum disalin; minta bila perlu) |
+| `server.py` | **Layanan produksi** — FastAPI `:8000` (`/health`, `/recognize`, `/enroll`, `DELETE /enroll/{id}`) | `python -m uvicorn server:app --port 8000` | — (belum disalin; minta bila perlu) |
 | `test_yunet_box.py` | **Uji bounding box** — gambar kotak `[x,y,w,h]` + skor ke-14 YuNet + oval + label status (`ok`/`face_outside_oval`/`partial_face`/`no_face`). Bedah per-fungsi & angka piksel terukur → [tanya-jawab-piksel-dan-geometri-wajah.md](tanya-jawab-piksel-dan-geometri-wajah.md) | `python test_yunet_box.py [--image foto.jpg --save keluar.jpg] [--size LxT]` | [code-test-yunet-box.md](code-test-yunet-box.md) |
 | `test_sface_points.py` | **Uji embedding** — gambar 5 landmark → `alignCrop` 112x112 → cetak vektor 128-d + cosine ke `.npz` | `python test_sface_points.py --image foto.jpg [--save keluar.jpg] [--clean] [--compare]` | — (belum disalin; minta bila perlu) |
 | `fit_oval.py` | **Kalibrasi oval** — hitung `p95(oval_need)` dari `oval_log.csv` → usulan `GUIDE_RY` baru; `--write` menimpa `face_engine.py` | `python fit_oval.py` (pratinjau) · `python fit_oval.py --write` (tulis) | — (belum disalin; minta bila perlu) |

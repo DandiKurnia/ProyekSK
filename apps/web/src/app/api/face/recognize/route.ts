@@ -2,8 +2,8 @@ import { NextResponse } from "next/server";
 import { supabaseServer } from "@/lib/supabase-server";
 
 // POST /api/face/recognize { image_base64, min_confidence? }
-// Diteruskan apa adanya ke POST :8200/recognize (contract: face-recognition.md).
-const FACE_URL = process.env.FACE_SERVICE_URL ?? "http://127.0.0.1:8200";
+// Diteruskan apa adanya ke POST /recognize face-service (contract: face-recognition.md).
+const FACE_URL = process.env.FACE_SERVICE_URL ?? "http://127.0.0.1:8000";
 
 export async function POST(request: Request) {
   try {

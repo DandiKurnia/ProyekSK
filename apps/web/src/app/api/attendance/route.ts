@@ -118,7 +118,7 @@ export async function GET(request: Request) {
 // Otak penentu absensi (prd-attendance.md §3 langkah 5): BUKAN browser yang dipercaya,
 // melainkan sesi 2FA di face-service. Urutan: cek siswa -> cek sesi verified/fresh ->
 // hitung present/late -> upsert idempoten -> konsumsi sesi -> LED (best-effort).
-const FACE_URL = process.env.FACE_SERVICE_URL ?? "http://127.0.0.1:8200";
+const FACE_URL = process.env.FACE_SERVICE_URL ?? "http://127.0.0.1:8000";
 const SESSION_MAX_AGE_S = 120; // bukti verified kedaluwarsa setelah 2 menit (anti-replay)
 
 async function faceFetch(path: string, init?: RequestInit) {
