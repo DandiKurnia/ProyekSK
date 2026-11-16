@@ -260,9 +260,10 @@ void prosesPerintah(String baris) {
   if (baris == "LED_OK") {
     ledHijau();
     lcdTulis("Absensi tercatat", "Terima kasih");
-    delay(700);
+    kirim("LED_DONE");                                // Balas cepat: face-service menunggu maks 2 dtk
+    delay(1800);                                      // Biar siswa sempat membaca pesan sukses
     ledMati();
-    kirim("LED_DONE");
+    lcdSiap();                                        // Kembali ke tampilan siaga
     return;
   }
 
