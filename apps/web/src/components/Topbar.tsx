@@ -3,23 +3,27 @@
 import { GraduationCap, CalendarDays, RefreshCw, User } from "lucide-react";
 import type { ClassOption } from "@/lib/overview";
 
-export function Topbar({
-  classes,
-  activeClassId,
-  onClassChange,
-  realtimeLive,
-  onRefresh,
-  refreshing,
-  pageTitle = "Overview",
-}: {
-  classes: ClassOption[];
-  activeClassId: string | null;
-  onClassChange: (id: string) => void;
-  realtimeLive: boolean;
-  onRefresh: () => void;
-  refreshing: boolean;
-  pageTitle?: string;
-}) {
+ export function Topbar({
+   classes,
+   activeClassId,
+   onClassChange,
+   date,
+   onDateChange,
+   realtimeLive,
+   onRefresh,
+   refreshing,
+   pageTitle = "Overview",
+ }: {
+   classes: ClassOption[];
+   activeClassId: string | null;
+   onClassChange: (id: string) => void;
+   date?: string;
+   onDateChange?: (d: string) => void;
+   realtimeLive: boolean;
+   onRefresh: () => void;
+   refreshing: boolean;
+   pageTitle?: string;
+ }) {
 
   return (
     <header className="flex items-center gap-2 sm:gap-3 pl-16 lg:px-5 pr-4 py-3 bg-aici-surface border-b border-aici-border">
@@ -51,18 +55,19 @@ export function Topbar({
         </select>
       </label>
 
-      <div className="hidden md:flex items-center gap-2 text-xs font-medium border border-aici-border-dark rounded-lg px-3 py-2">
-        <CalendarDays className="w-4 h-4 shrink-0" />
-        <span className="truncate">
-          {new Intl.DateTimeFormat("id-ID", {
-            weekday: "short",
-            day: "numeric",
-            month: "short",
-            year: "numeric",
-            timeZone: "Asia/Jakarta",
-          }).format(new Date())}
-        </span>
-      </div>
+      {date && onDateChange && (
+        <label className="flex items-center gap-2 text-xs font-medium border border-aici-border-dark rounded-lg px-3 py-2 hover:bg-aici-surface-nested cursor-pointer">
+          <CalendarDays className="w-4 h-4 shrink-0" />
+          <input
+            type="date"
+            value={date}
+            max={new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Jakarta" }).format(new Date())}
+            onChange={(e) => e.target.value && onDateChange(e.target.value)}
+            className="bg-transparent outline-none cursor-pointer font-medium"
+            aria-label="Tanggal aktif"
+          />
+        </label>
+      )}
 
       <button
         aria-label="Refresh"

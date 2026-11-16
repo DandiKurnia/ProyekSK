@@ -15,10 +15,10 @@ const MENU = [
   { label: "Overview", icon: LayoutDashboard, href: "/" },
   { label: "Attendance", icon: ClipboardCheck, href: "/attendance" },
   { label: "Students", icon: Users, href: "/students" },
-  { label: "Classes & Seats", icon: Armchair, href: "#" },
+  { label: "Classes & Seats", icon: Armchair, href: "/classes-seats" },
   { label: "Device Monitoring", icon: Cpu, href: "#" },
   { label: "Reports", icon: BarChart3, href: "#" },
-  { label: "Settings", icon: Settings, href: "#", badge: "ADMIN" },
+  { label: "Settings", icon: Settings, href: "/settings", badge: "ADMIN" },
 ];
 
 export function Sidebar({ active = "Overview" }: { active?: string }) {
