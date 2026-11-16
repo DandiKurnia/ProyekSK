@@ -11,6 +11,11 @@
 //   LED_OK           -> "LED_DONE" (kedip hijau, dipakai saat absensi terverifikasi)
 //   CARD             -> "CARDWAIT" ... "CARD_OK <UID>" / "CARD_TIMEOUT" (jendela tempel kartu 15 detik)
 //   CANCEL           -> membatalkan jendela CARD yang sedang terbuka
+//   LCD <b1>|<b2>    -> tampilkan teks bebas (tanpa balasan; mis. "LCD BUDI|Hadir OK")
+//
+// LCD I2C 16x2 (backpack PCF8574): VCC=5V, GND=GND, SDA=GPIO21, SCL=GPIO22.
+// Install di Library Manager: "LiquidCrystal I2C" (Frank de Brabander).
+// Alamat umum 0x27; ganti LCD_ADDR 0x3F bila LCD hanya backlight tanpa teks.
 //
 // Event dari ESP32 ke laptop:
 //   BOOT <versi>              -> saat ESP32 menyala
@@ -25,8 +30,32 @@
 #include <Adafruit_Fingerprint.h>  // Library protokol paket biner UART sensor sidik jari (R503 / AS608)
 #include <SPI.h>                   // Bus SPI untuk reader RFID RC522
 #include <MFRC522.h>               // Driver reader RFID RC522 (kartu MIFARE 13.56 MHz)
+#include <Wire.h>                  // Bus I2C untuk LCD 16x2 (backpack PCF8574)
+#include <LiquidCrystal_I2C.h>     // Driver LCD I2C (library "LiquidCrystal I2C" / Frank de Brabander)
 
-#define FW_VERSION "1.1"           // v1.1: tambah reader RFID RC522 (CARD/CARD_OK/CARD_TIMEOUT)
+#define FW_VERSION "1.2"           // v1.2: tampilan status di LCD I2C 16x2
+
+// LCD I2C 16x2: SDA=GPIO21, SCL=GPIO22 (default Wire ESP32), VCC=5V, GND=GND.
+// Alamat I2C umum 0x27; sebagian modul 0x3F -> ganti bila LCD hanya menyala tanpa teks.
+#define LCD_ADDR    0x27
+#define LCD_COLS    16
+#define LCD_ROWS    2
+#define I2C_SDA_PIN 21
+#define I2C_SCL_PIN 22
+
+// ---------- LCD I2C helper ----------
+// Satu-satunya penulis LCD agar teks tidak tercecer; tiap baris dirapikan ke LCD_COLS.
+LiquidCrystal_I2C lcd(LCD_ADDR, LCD_COLS, LCD_ROWS);
+
+void lcdTulis(const String &baris1, const String &baris2 = "") {
+  lcd.clear();                                        // clear() sudah mengosongkan baris 2 bila kosong
+  lcd.setCursor(0, 0);
+  lcd.print(baris1.substring(0, LCD_COLS));
+  lcd.setCursor(0, 1);
+  lcd.print(baris2.substring(0, LCD_COLS));
+}
+
+void lcdSiap() { lcdTulis("Siap absen", "Jari / Kartu"); }
 
 // Konfigurasi pin UART2 pada ESP32 untuk berbicara dengan sensor R503
 #define RX_PIN      16             // Pin GPIO16 (RX2 ESP32) menerima data dari kabel Kuning (TX R503)
@@ -107,39 +136,44 @@ void tungguJariAngkat(uint32_t timeout_ms = 4000) {
 void enrollFinger(uint8_t id) {
   kirim(String("PLACE ") + id);                       // Beri tahu laptop: minta siswa tempelkan jari ke-1
   ledBiru();                                          // Nyalakan ring biru sebagai tanda siap rekam
+  lcdTulis(String("Enroll #") + id, "Tempel jari 1/2");
 
   // Tahap 1: Ambil citra jari pertama dan ubah menjadi fitur minutiae di CharBuffer 1
   uint8_t p = tungguJari();
-  if (p != FINGERPRINT_OK) { kirimKode("ENROLL_FAIL", id, p); ledMerah(); return; }
+  if (p != FINGERPRINT_OK) { lcdTulis(String("Enroll GAGAL#") + id, "Ulangi"); kirimKode("ENROLL_FAIL", id, p); ledMerah(); delay(1200); lcdSiap(); return; }
 
   p = finger.image2Tz(1);                             // Konversi gambar mentah ke titik fitur di slot RAM 1 (CharBuffer1)
-  if (p != FINGERPRINT_OK) { kirimKode("ENROLL_FAIL", id, p); ledMerah(); return; }
+  if (p != FINGERPRINT_OK) { lcdTulis(String("Enroll GAGAL#") + id, "Ulangi"); kirimKode("ENROLL_FAIL", id, p); ledMerah(); delay(1200); lcdSiap(); return; }
 
   // Minta jari diangkat dulu supaya pengambilan kedua benar-benar posisi sampel baru
   kirim("REMOVE");
+  lcdTulis(String("Enroll #") + id, "Angkat jari");
   tungguJariAngkat();
 
   // Tahap 2: Ambil citra jari kedua dan ubah menjadi fitur minutiae di CharBuffer 2
   kirim(String("PLACE ") + id);                       // Minta siswa menempelkan jari yang sama untuk ke-2 kalinya
+  lcdTulis(String("Enroll #") + id, "Tempel jari 2/2");
   p = tungguJari();
-  if (p != FINGERPRINT_OK) { kirimKode("ENROLL_FAIL", id, p); ledMerah(); return; }
+  if (p != FINGERPRINT_OK) { lcdTulis(String("Enroll GAGAL#") + id, "Ulangi"); kirimKode("ENROLL_FAIL", id, p); ledMerah(); delay(1200); lcdSiap(); return; }
 
   p = finger.image2Tz(2);                             // Konversi gambar kedua ke titik fitur di slot RAM 2 (CharBuffer2)
-  if (p != FINGERPRINT_OK) { kirimKode("ENROLL_FAIL", id, p); ledMerah(); return; }
+  if (p != FINGERPRINT_OK) { lcdTulis(String("Enroll GAGAL#") + id, "Ulangi"); kirimKode("ENROLL_FAIL", id, p); ledMerah(); delay(1200); lcdSiap(); return; }
 
   // Tahap 3: Bandingkan CharBuffer1 & CharBuffer2; jika berasal dari jari yang sama, gabungkan jadi template
   p = finger.createModel();
-  if (p != FINGERPRINT_OK) { kirimKode("ENROLL_FAIL", id, p); ledMerah(); return; }
+  if (p != FINGERPRINT_OK) { lcdTulis(String("Enroll GAGAL#") + id, "Ulangi"); kirimKode("ENROLL_FAIL", id, p); ledMerah(); delay(1200); lcdSiap(); return; }
 
   // Tahap 4: Simpan template permanen ke memori Flash internal R503 pada nomor slot 'id' (1-200)
   p = finger.storeModel(id);
-  if (p != FINGERPRINT_OK) { kirimKode("ENROLL_FAIL", id, p); ledMerah(); return; }
+  if (p != FINGERPRINT_OK) { lcdTulis(String("Enroll GAGAL#") + id, "Ulangi"); kirimKode("ENROLL_FAIL", id, p); ledMerah(); delay(1200); lcdSiap(); return; }
 
   // Berhasil: kirim sinyal sukses ke Flask dan nyalakan lampu indikator
   kirimKode("ENROLL_OK", id, 0);
   ledHijau();
-  delay(600);
+  lcdTulis(String("Enroll OK #") + id, "Selesai");
+  delay(1200);
   ledMati();
+  lcdSiap();
 }
 
 // ---------- Verifikasi 1:N (Pencocokan Jari Saat Absensi 2 Faktor) ----------
@@ -159,18 +193,20 @@ void verifikasi() {
     snprintf(buffer, sizeof(buffer), "MATCH %u %u", finger.fingerID, finger.confidence);
     kirim(buffer);
     ledHijau();
-    delay(400);
+    lcdTulis("Sidik jari OK", String("ID ") + finger.fingerID + " (" + finger.confidence + "%)");
+    delay(1000);                                     // Beri waktu membaca hasil di LCD
     ledMati();
   } else {
     // Jari tidak ada di database sensor: kirim "NOMATCH" agar Flask langsung menolak tanpa menunggu 30 detik
     kirim("NOMATCH");
     ledMerah();
-    delay(300);
+    lcdTulis("Tidak dikenali", "Coba lagi");
+    delay(1000);
     ledMati();
   }
-
   tungguJariAngkat();                                 // Wajib angkat jari dulu sebelum bisa memindai lagi
   delay(300);                                         // Debounce tambahan agar tidak memicu bacaan ganda
+  lcdSiap();                                          // Kembali ke tampilan siaga setelah sidik selesai
 }
 
 // ---------- Pembacaan Kartu RFID (non-blocking, dipanggil tiap loop) ----------
@@ -201,8 +237,10 @@ void cekKartu() {
   if (cardWindow) {
     cardWindow = false;                         // Jendela daftar: hasil sekali pakai
     kirim(String("CARD_OK ") + uid);
+    lcdTulis("Kartu terdaftar", uid);
   } else {
     kirim(String("CARD ") + uid);               // Di luar jendela: sesi 2FA yang menentukan pemilik
+    lcdTulis("Kartu dibaca", uid);
   }
 }
 
@@ -221,6 +259,7 @@ void prosesPerintah(String baris) {
   // 2. LED_OK: Perintah dari Flask setelah absensi 2 faktor tercatat di SQLite
   if (baris == "LED_OK") {
     ledHijau();
+    lcdTulis("Absensi tercatat", "Terima kasih");
     delay(700);
     ledMati();
     kirim("LED_DONE");
@@ -231,6 +270,7 @@ void prosesPerintah(String baris) {
   if (baris == "CLEAR" || baris == "c") {
     uint8_t p = finger.emptyDatabase();
     kirim(p == FINGERPRINT_OK ? String("CLEAR_OK 0") : String("CLEAR_FAIL ") + p);
+    lcdTulis(p == FINGERPRINT_OK ? "Semua template" : "Hapus GAGAL", p == FINGERPRINT_OK ? "sudah dihapus" : String("kode ") + p);
     return;
   }
 
@@ -253,6 +293,7 @@ void prosesPerintah(String baris) {
     cardDeadline = millis() + CARD_WINDOW_MS;
     lastCardUid = "";                             // kartu yang sama boleh dipakai lagi
     kirim("CARDWAIT");
+    lcdTulis("Tempel kartu", "15 dtk");
     return;
   }
 
@@ -262,6 +303,15 @@ void prosesPerintah(String baris) {
       cardWindow = false;
       kirim("CARD_TIMEOUT");
     }
+    return;
+  }
+
+  // 5c. LCD <baris1>|<baris2>: teks bebas dari laptop (mis. nama siswa / pesan sesi)
+  if (baris.startsWith("LCD ")) {
+    String isi = baris.substring(4);
+    int pisah = isi.indexOf('|');
+    if (pisah < 0) lcdTulis(isi);
+    else lcdTulis(isi.substring(0, pisah), isi.substring(pisah + 1));
     return;
   }
 
@@ -297,6 +347,12 @@ void setup() {
   pinMode(WAKEUP_PIN, INPUT);                         // Set pin wakeup sebagai input
   fpSerial.begin(57600, SERIAL_8N1, RX_PIN, TX_PIN);  // Buka UART2 ke sensor R503 (baudrate bawaan R503 = 57600 bps)
 
+  // Nyalakan LCD duluan agar proses boot terlihat di layar fisik
+  Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
+  lcd.init();
+  lcd.backlight();
+  lcdTulis("Smart Classroom", "Mulai...");
+
   delay(300);                                         // Tunggu tegangan sensor stabil setelah power-on
   kirim(String("BOOT ") + FW_VERSION);                // Kabari laptop bahwa ESP32 baru saja booting
 
@@ -306,6 +362,7 @@ void setup() {
   // Pastikan sensor R503 merespons handshake password UART
   if (!finger.verifyPassword()) {
     kirim("SENSOR_FAIL 0");                           // Jika kabel lepas / salah pin TX-RX, laporkan ke laptop
+    lcdTulis("Sensor R503", "Tidak terdeteksi");
     return;                                           // Jangan mengunci ESP32 di while(1) agar tetap bisa didiagnosis
   }
 
@@ -320,6 +377,9 @@ void setup() {
   rfidSiap = (v != 0x00 && v != 0xFF);
   if (!rfidSiap) {
     kirim("RFID_FAIL 0");                             // Reader tidak terdeteksi: cek 3.3V & kabel SPI
+    lcdTulis("Siap absen", "Tanpa kartu");
+  } else {
+    lcdSiap();
   }
   ledBiru();
 }
@@ -337,6 +397,15 @@ void loop() {
   if (cardWindow && millis() >= cardDeadline) {
     cardWindow = false;
     kirim("CARD_TIMEOUT");
+    lcdSiap();
+  } else if (cardWindow) {
+    // Hitung mundur non-blocking: tampilkan detik tersisa, tulis ulang hanya saat angka berubah
+    static uint32_t lcdSisaTerakhir = 0xFFFFFFFF;
+    uint32_t sisa = (cardDeadline - millis()) / 1000 + 1;
+    if (sisa != lcdSisaTerakhir) {
+      lcdSisaTerakhir = sisa;
+      lcdTulis("Tempel kartu", String("Sisa ") + sisa + " dtk");
+    }
   }
 
   // Prioritas 3: kartu RFID menempel (non-blocking)

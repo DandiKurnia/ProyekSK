@@ -49,8 +49,28 @@ Pemisah argumen adalah **spasi**. Firmware mem-`trim()` tiap baris dan mengabaik
 | `LED_OK` | `LED_DONE` | Kedip hijau 700 ms; dipakai setelah absensi tercatat |
 | `CARD` | `CARDWAIT` … `CARD_OK <UID>` / `CARD_TIMEOUT` | Buka jendela tempel kartu RFID 15 detik (daftar kartu). UID format `AA:BB:CC:DD` huruf besar |
 | `CANCEL` | (tidak ada respons bila tidak ada jendela; `CARD_TIMEOUT` bila jendela sedang terbuka) | Tutup jendela `CARD` tanpa hasil |
+| `LCD <baris1>\|<baris2>` | tidak ada respons | Tulis teks bebas ke LCD I2C 16x2 (maks 16 karakter/baris; tanpa `\|` hanya baris 1). Dipakai face service untuk nama siswa / pesan sesi |
 
 Alias khusus Serial Monitor: `e` (enroll interaktif), `d <id>`, `c`, `m`. Perintah tak dikenal → `ERR_UNKNOWN <perintah>`. Perintah `CARD` tanpa reader (`rfidSiap` false) → `CARD_FAIL 0`.
+
+### Tampilan LCD I2C 16x2 (firmware v1.2)
+
+LCD backpack PCF8574: **VCC=5V, GND=GND, SDA=GPIO21, SCL=GPIO22**, alamat `0x27` (ganti `LCD_ADDR` ke `0x3F` bila hanya backlight yang menyala). Library: **LiquidCrystal I2C** (Frank de Brabander).
+
+Tampilan ditulis firmware sendiri, jadi operator melihat status tanpa membuka laptop:
+
+| Keadaan | Baris 1 | Baris 2 |
+|---|---|---|
+| Boot | `Smart Classroom` | `Mulai...` |
+| Sensor gagal | `Sensor R503` | `Tidak terdeteksi` |
+| Siaga | `Siap absen` | `Jari / Kartu` (atau `Tanpa kartu` bila RC522 gagal) |
+| Enroll | `Enroll #<id>` | `Tempel jari 1/2` → `Angkat jari` → `Tempel jari 2/2` |
+| Enroll hasil | `Enroll OK #<id>` / `Enroll GAGAL#<id>` | `Selesai` / `Ulangi` |
+| Verifikasi jari | `Sidik jari OK` | `ID <slot> (<skor>%)` |
+| Verifikasi gagal | `Tidak dikenali` | `Coba lagi` |
+| Jendela kartu | `Tempel kartu` | hitung mundur `Sisa N dtk` |
+| Kartu terbaca | `Kartu terdaftar` (dalam jendela) / `Kartu dibaca` (bebas) | UID |
+| Absensi tercatat | `Absensi tercatat` | `Terima kasih` |
 
 ### Event ESP32 → PC
 
