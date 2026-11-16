@@ -29,5 +29,5 @@
 
 ## Tugas Berikutnya / Tidak dikerjakan
 
-- **Absensi pulang (check-out) — BACKLOG (2026-11-02).** Sistem kini hanya mencatat kedatangan (`check_in_at`); tidak ada kolom `check_out_at`. Bila dibutuhkan: migrasi Supabase (kolom `check_out_at` / tabel terpisah) → bedakan scan kedua hari yang sama sebagai pulang di `POST /api/attendance` → tampilkan jam pulang di `/attendance` + Overview. Kerjakan di branch baru terpisah (mis. `feat/attendance-checkout`), bukan di branch ini.
+- **Absensi pulang (check-out) — SELESAI (2026-11-16, branch `feat/attendance-checkout`).** Kolom `attendance.check_out_at` (migrasi `§8a` di `docs/database.md`); scan setelah jam `app_config.checkout_after` (default `12:00` WIB) = pulang; scan ulang sebelum jam itu idempoten (jam masuk pertama dipertahankan); `/attendance` + `/camera` menampilkan kedua jam.
 - Tugas lain yang tidak dikerjakan: `attendance_sessions` (fallback Wi-Fi only), RLS/policy, koreksi manual admin, ekspor CSV.

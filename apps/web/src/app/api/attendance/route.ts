@@ -46,7 +46,7 @@ export async function GET(request: Request) {
     let q = supabaseServer
       .from("attendance")
       .select(
-        "attendance_id, student_id, status, check_in_at, face_confidence, fingerprint_slot, students(full_name), classes(name)",
+        "attendance_id, student_id, status, check_in_at, check_out_at, face_confidence, fingerprint_slot, students(full_name), classes(name)",
         { count: "exact" }
       )
       .eq("class_id", activeClassId)
@@ -63,6 +63,7 @@ export async function GET(request: Request) {
       student_id: string;
       status: string;
       check_in_at: string;
+      check_out_at: string | null;
       face_confidence: number | null;
       fingerprint_slot: number | null;
       students: { full_name: string } | Array<{ full_name: string }> | null;
@@ -79,6 +80,7 @@ export async function GET(request: Request) {
     let rows = ((data ?? []) as Row[]).map((r) => ({
       id: `sess-${r.attendance_id.slice(0, 4)}`,
       time: r.check_in_at,
+      check_out_at: r.check_out_at,
       student_id: r.student_id,
       full_name: pick(r.students, "full_name") ?? r.student_id,
       class_name: pick(r.classes, "name") ?? activeClassId,
@@ -127,11 +129,24 @@ async function faceFetch(path: string, init?: RequestInit) {
   return { status: res.status, data };
 }
 
-/** `app_config.late_threshold` boleh `"07:15"` atau `{"time":"07:15"}`; format lain -> null (fallback present). */
-function parseLateTime(v: unknown): string | null {
+/** PostgrestError bukan `Error` (objek biasa), jadi `String(err)` jadi "[object Object]". */
+function errText(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (err && typeof err === "object" && "message" in err) {
+    const msg = (err as { message?: unknown }).message;
+    if (typeof msg === "string" && msg) return msg;
+  }
+  return String(err);
+}
+
+/** Nilai jam di `app_config` boleh `"07:15"` atau `{"time":"07:15"}`; format lain -> null. */
+function parseHm(v: unknown): string | null {
   const raw = typeof v === "string" ? v : v && typeof v === "object" && "time" in v ? v.time : null;
   return typeof raw === "string" && /^\d{2}:\d{2}$/.test(raw) ? raw : null;
 }
+
+/** `app_config.checkout_after` kosong/rusak -> jam ini (WIB), supaya absen pulang tetap bisa dicatat. */
+const DEFAULT_CHECKOUT_AFTER = "12:00";
 
 export async function POST(request: Request) {
   try {
@@ -182,7 +197,7 @@ export async function POST(request: Request) {
       if (!verifiedAt || Date.now() / 1000 - verifiedAt > SESSION_MAX_AGE_S)
         return NextResponse.json({ error: "bukti 2FA kedaluwarsa, ulangi scan wajah" }, { status: 409 });
     }
-    // 3. Status present/late dari app_config.late_threshold {"time":"HH:MM"} WIB
+    // 3. Ambang dari app_config (WIB): late_threshold {"time":"HH:MM"} + checkout_after
     const nowDate = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Jakarta" }).format(new Date());
     const nowHm = new Intl.DateTimeFormat("en-GB", {
       timeZone: "Asia/Jakarta",
@@ -190,42 +205,97 @@ export async function POST(request: Request) {
       minute: "2-digit",
       hour12: false,
     }).format(new Date());
-    const cfg = await supabaseServer.from("app_config").select("value").eq("key", "late_threshold").maybeSingle();
-    const lateTime = cfg.data && "value" in cfg.data ? parseLateTime(cfg.data.value) : null;
-    // 4. Tulis idempoten. Verified -> upsert (boleh menimpa baris audit hari itu);
-    //    audit failed/expired -> insert-only supaya tidak menurunkan baris present/late.
-    const finalStatus = isAudit ? sState : lateTime && nowHm > lateTime ? "late" : "present";
-    const faceConfidence = s.face_confidence;
-    // Bukti yang benar-benar dipakai: kartu (kalau cocok) didahulukan, sisanya slot jari.
-    // Skema `attendance` tidak punya kolom rfid_uid; kartu terekam sebagai fingerprint_slot NULL.
-    const usedUid = factorOk && matchedUid && boundUids.includes(matchedUid) ? matchedUid : null;
-    const row = {
-      student_id: studentId,
-      class_id: stu.data.class_id,
-      date: nowDate,
-      check_in_at: new Date().toISOString(),
-      face_confidence: typeof faceConfidence === "number" ? faceConfidence : null,
-      fingerprint_slot: usedUid ? null : stu.data.fingerprint_slot,
-      // tidak ada kolom rfid_uid di attendance - JANGAN tambahkan tanpa migrasi
-      status: finalStatus,
+    const cfg = await supabaseServer
+      .from("app_config")
+      .select("key, value")
+      .in("key", ["late_threshold", "checkout_after"]);
+    if (cfg.error) throw cfg.error;
+    const cfgMap = new Map((cfg.data ?? []).map((r) => [String(r.key), r.value as unknown]));
+    const lateTime = parseHm(cfgMap.get("late_threshold"));
+    const checkoutAfter = parseHm(cfgMap.get("checkout_after")) ?? DEFAULT_CHECKOUT_AFTER;
+
+    type SavedRow = {
+      attendance_id: string;
+      status: string;
+      check_in_at: string;
+      check_out_at: string | null;
     };
-    const write = isAudit
-      ? supabaseServer.from("attendance").upsert(row, { onConflict: "student_id,class_id,date", ignoreDuplicates: true })
-      : supabaseServer.from("attendance").upsert(row, { onConflict: "student_id,class_id,date" });
-    const saved = await write.select("attendance_id, status, check_in_at").single();
-    if (saved.error && !(isAudit && saved.error.code === "23505"))
-      throw saved.error;
-    // audit yang menabrak baris existing = tidak mencatat apa-apa; baca state terkini untuk respons
-    const current =
-      saved.data ??
-      (await supabaseServer
-        .from("attendance")
-        .select("attendance_id, status, check_in_at")
-        .match({ student_id: studentId, class_id: stu.data.class_id, date: nowDate })
-        .single()).data;
+
+    // 4. Baris hari ini menentukan masuk vs pulang (unik: student_id+class_id+date).
+    const found = await supabaseServer
+      .from("attendance")
+      .select("attendance_id, status, check_in_at, check_out_at")
+      .match({ student_id: studentId, class_id: stu.data.class_id, date: nowDate })
+      .maybeSingle();
+    if (found.error) throw found.error;
+    const today = (found.data as SavedRow | null) ?? null;
+    const counted = !!today && (today.status === "present" || today.status === "late");
+
+    let current: SavedRow | null = null;
+    let action: "check_in" | "check_out" = "check_in";
+
+    if (counted && today) {
+      if (nowHm >= checkoutAfter) {
+        // Scan setelah jam pulang: catat jam pulang, jam masuk TIDAK bergeser.
+        action = "check_out";
+        if (today.check_out_at) {
+          current = today; // sudah pernah pulang: idempoten
+        } else {
+          const upd = await supabaseServer
+            .from("attendance")
+            .update({ check_out_at: new Date().toISOString() })
+            .eq("attendance_id", today.attendance_id)
+            .select("attendance_id, status, check_in_at, check_out_at")
+            .single();
+          if (upd.error) throw upd.error;
+          current = upd.data as SavedRow;
+        }
+      } else {
+        // Scan ulang sebelum jam pulang: idempoten, jam masuk pertama dipertahankan.
+        current = today;
+      }
+    }
+
+    // 5. Belum ada baris sah hari ini (atau baris audit failed/expired): tulis sebagai masuk.
+    if (!current) {
+      const finalStatus = isAudit ? sState : lateTime && nowHm > lateTime ? "late" : "present";
+      const faceConfidence = s.face_confidence;
+      // Bukti yang benar-benar dipakai: kartu (kalau cocok) didahulukan, sisanya slot jari.
+      // Skema `attendance` tidak punya kolom rfid_uid; kartu terekam sebagai fingerprint_slot NULL.
+      const usedUid = factorOk && matchedUid && boundUids.includes(matchedUid) ? matchedUid : null;
+      const row = {
+        student_id: studentId,
+        class_id: stu.data.class_id,
+        date: nowDate,
+        check_in_at: new Date().toISOString(),
+        face_confidence: typeof faceConfidence === "number" ? faceConfidence : null,
+        fingerprint_slot: usedUid ? null : stu.data.fingerprint_slot,
+        // tidak ada kolom rfid_uid di attendance - JANGAN tambahkan tanpa migrasi
+        status: finalStatus,
+      };
+      const write = isAudit
+        ? supabaseServer.from("attendance").upsert(row, { onConflict: "student_id,class_id,date", ignoreDuplicates: true })
+        : supabaseServer.from("attendance").upsert(row, { onConflict: "student_id,class_id,date" });
+      const saved = await write.select("attendance_id, status, check_in_at, check_out_at").single();
+      // Audit (failed/expired) yang menabrak baris existing mengembalikan 0 baris -> PGRST116,
+      // itu bukan kegagalan: langkah di bawah membaca baris yang sudah ada.
+      if (
+        saved.error &&
+        !(isAudit && (saved.error.code === "23505" || saved.error.code === "PGRST116"))
+      )
+        throw saved.error;
+      // audit yang menabrak baris existing = tidak mencatat apa-apa; baca state terkini untuk respons
+      current =
+        (saved.data as SavedRow | null) ??
+        ((await supabaseServer
+          .from("attendance")
+          .select("attendance_id, status, check_in_at, check_out_at")
+          .match({ student_id: studentId, class_id: stu.data.class_id, date: nowDate })
+          .single()).data as SavedRow | null);
+    }
     if (!current) throw new Error("gagal membaca baris absensi");
 
-    // 5. Konsumsi bukti (sekali pakai). LED hijau hanya untuk absensi yang benar-benar sah.
+    // 6. Konsumsi bukti (sekali pakai). LED hijau hanya untuk absensi yang benar-benar sah.
     void faceFetch("/fingerprint/session", { method: "DELETE" });
     if (!isAudit)
       void faceFetch("/fingerprint/led", {
@@ -239,14 +309,16 @@ export async function POST(request: Request) {
         attendance_id: current.attendance_id,
         student_id: studentId,
         full_name: stu.data.full_name,
+        action,
         status: current.status,
         check_in_at: current.check_in_at,
+        check_out_at: current.check_out_at,
       },
       { status: 201 }
     );
   } catch (err: unknown) {
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : String(err) },
+      { error: errText(err) },
       { status: 500 }
     );
   }

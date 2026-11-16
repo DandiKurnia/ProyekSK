@@ -135,9 +135,9 @@ Indeks `(step, expires_at)` untuk job penanda `expired`.
 | `attendance_id` | `uuid` | PK DEFAULT `gen_random_uuid()` | |
 | `session_id` | `text` | UNIQUE, FK → `attendance_sessions`, nullable | `NULL` pada insert langsung 2FA lokal (UNIQUE Postgres mengizinkan banyak NULL); terisi pada fallback Wi-Fi (1 sesi → maks 1 record) |
 | `student_id` | `text` | FK → `students`, NOT NULL | |
-| `class_id` | `text` | FK → `classes`, NOT NULL | |
 | `date` | `date` | NOT NULL | Tanggal absensi (zona `Asia/Jakarta`) |
 | `check_in_at` | `timestamptz` | NOT NULL | Waktu check-in |
+| `check_out_at` | `timestamptz` | nullable | Waktu check-out (scan kedua setelah `app_config.checkout_after`); `NULL` = belum pulang |
 | `face_confidence` | `real` | — | Skor numerik saja |
 | `fingerprint_slot` | `smallint` | — | Slot ID saja |
 | `status` | `text` | NOT NULL CHECK (`present`/`late`/`failed`/`expired`) | |
@@ -354,6 +354,7 @@ create table public.attendance (
   class_id         text not null references public.classes (class_id),
   date             date not null,
   check_in_at      timestamptz not null,
+  check_out_at     timestamptz,
   face_confidence  real,
   fingerprint_slot smallint,
   status           text not null
@@ -366,6 +367,11 @@ create table public.attendance (
 create index attendance_class_date_idx
   on public.attendance (class_id, date);
 
+
+-- 8a. Migrasi 2026-11-16: absen pulang (check-out) — jalankan di Supabase SQL editor
+-- alter table public.attendance add column if not exists check_out_at timestamptz;
+-- insert into public.app_config (key, value) values ('checkout_after', '"12:00"')
+--   on conflict (key) do nothing;
 -- 9. Seats
 create table public.seats (
   seat_id      text primary key,

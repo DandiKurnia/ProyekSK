@@ -40,6 +40,16 @@ interface RecognizeResult {
   timestamp: string;
 }
 
+// Alasan terminal/sementara dari bridge seri: wajah terverifikasi, tapi faktor kedua tidak cocok.
+// Dipisah per faktor supaya alert tidak tertukar dengan "wajah belum terdaftar".
+const FACTOR_CAUSE: Record<string, string> = {
+  uid_mismatch: "Kartu RFID tidak cocok dengan wajah ini",
+  slot_mismatch: "Sidik jari tidak cocok dengan wajah ini",
+  no_match: "Sidik jari tidak cocok",
+};
+const factorCause = (reason?: string | null) =>
+  (reason && FACTOR_CAUSE[reason]) || "Faktor kedua tidak cocok";
+
 export default function CameraKioskPage() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -71,8 +81,19 @@ export default function CameraKioskPage() {
   interface TwoFa {
     state: "waiting" | "verified" | "failed" | "expired" | "error";
     message?: string;
+    /** Alasan dari bridge (uid_mismatch / slot_mismatch / no_match): faktor mana yang salah. */
+    reason?: string | null;
+    /** Percobaan salah yang sudah dipakai (bridge menyerah setelah 3x). */
+    attempts?: number;
+    /** UID kartu bila faktor kedua yang lolos adalah kartu RFID (null/undefined = jari). */
+    matched_uid?: string | null;
     /** Hasil POST /api/attendance setelah 2FA lolos (null = sedang mencatat / gagal dicatat). */
-    record?: { status: string; check_in_at: string } | null;
+    record?: {
+      action: "check_in" | "check_out";
+      status: string;
+      check_in_at: string;
+      check_out_at: string | null;
+    } | null;
     recordError?: string;
   }
 
@@ -99,7 +120,8 @@ export default function CameraKioskPage() {
   }, [twofa?.state]);
 
 
-  const startTwoFa = useCallback(async (studentId: string, slot: number) => {
+  // Slot jari / UID kartu ditentukan Route Handler dari Supabase; kiosk cukup kirim student_id.
+  const startTwoFa = useCallback(async (studentId: string) => {
     if (twofaFor.current === studentId) return; // auto-scan kirim frame tiap 1.8 dtk: jangan buka sesi ganda
     // Siswa yang baru selesai 2FA masih di depan kamera -> jangan buka sesi baru (LED/absensi berulang)
     if (twofaDone.current.id === studentId && Date.now() - twofaDone.current.at < 30000) return;
@@ -109,7 +131,7 @@ export default function CameraKioskPage() {
       const res = await fetch("/api/fingerprint/session", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ student_id: studentId, slot, ttl: 30 }),
+        body: JSON.stringify({ student_id: studentId, ttl: 30 }),
       });
       const opened = await res.json();
       if (!res.ok) throw new Error(opened.detail ?? opened.error ?? `HTTP ${res.status}`);
@@ -121,7 +143,12 @@ export default function CameraKioskPage() {
     twofaPoll.current = window.setInterval(async () => {
       try {
         const r = await fetch("/api/fingerprint/session", { cache: "no-store" });
-        const s = (await r.json()) as { state?: string; reason?: string };
+        const s = (await r.json()) as {
+          state?: string;
+          reason?: string;
+          attempts?: number;
+          matched_uid?: string | null;
+        };
         if (s.state && s.state !== "waiting") {
           window.clearInterval(twofaPoll.current!);
           twofaPoll.current = null;
@@ -135,24 +162,52 @@ export default function CameraKioskPage() {
                 headers: { "content-type": "application/json" },
                 body: JSON.stringify({ student_id: studentId }),
               });
-              const rec = (await a.json()) as { status?: string; check_in_at?: string; error?: string };
+              const rec = (await a.json()) as {
+                action?: "check_in" | "check_out";
+                status?: string;
+                check_in_at?: string;
+                check_out_at?: string | null;
+                error?: string;
+              };
               setTwofa(
                 a.ok && rec.status
-                  ? { state: termState, message: s.reason, record: { status: rec.status, check_in_at: rec.check_in_at ?? "" } }
-                  : { state: termState, message: s.reason, recordError: rec.error ?? `HTTP ${a.status}` }
+                  ? {
+                      state: termState,
+                      message: s.reason,
+                      reason: s.reason ?? null,
+                      matched_uid: s.matched_uid ?? null,
+                      record: {
+                        action: rec.action ?? "check_in",
+                        status: rec.status,
+                        check_in_at: rec.check_in_at ?? "",
+                        check_out_at: rec.check_out_at ?? null,
+                      },
+                    }
+                  : {
+                      state: termState,
+                      message: s.reason,
+                      reason: s.reason ?? null,
+                      recordError: rec.error ?? `HTTP ${a.status}`,
+                    }
               );
             } catch (err: unknown) {
               setTwofa({
                 state: termState,
                 message: s.reason,
+                reason: s.reason ?? null,
                 recordError: err instanceof Error ? err.message : "gagal mencatat",
               });
             }
           } else {
-            setTwofa({ state: termState, message: s.reason });
+            setTwofa({ state: termState, message: s.reason, reason: s.reason ?? null });
           }
         } else if (s.state) {
-          setTwofa({ state: s.state as TwoFa["state"] });
+          // Masih menunggu: tampilkan faktor mana yang salah bila percobaan sudah terpakai.
+          setTwofa({
+            state: s.state as TwoFa["state"],
+            reason: s.reason ?? null,
+            attempts: typeof s.attempts === "number" ? s.attempts : undefined,
+          });
         }
       } catch {
         // Jaringan putus sesaat: polling berikutnya mencoba lagi
@@ -295,9 +350,10 @@ export default function CameraKioskPage() {
           reason: data.reason ?? null,
           timestamp: now,
         });
-        // Wajah cocok + siswa punya sidik jari -> kunci sesi, tunggu jari (TTL 30 dtk di server)
-        if (data.match && data.student_id && data.fingerprint_slot) {
-          startTwoFa(data.student_id, Number(data.fingerprint_slot));
+        // Wajah cocok -> kunci sesi, tunggu faktor kedua (TTL 30 dtk di server).
+        // Berlaku juga untuk siswa kartu-saja: Route Handler menolak sendiri bila belum enroll apa pun.
+        if (data.match && data.student_id) {
+          startTwoFa(data.student_id);
         }
       } else {
         setLastResult({
@@ -674,11 +730,11 @@ export default function CameraKioskPage() {
                   </div>
                 </div>
 
-                {/* Status Langkah ke-2 (Fingerprint) */}
-                {!lastResult.fingerprint_slot ? (
+                {/* Status Langkah ke-2 (faktor kedua: jari atau kartu RFID) */}
+                {twofa?.state === "error" && /belum enroll/i.test(twofa.message ?? "") ? (
                   <div className="p-4 rounded-xl bg-amber-50 border border-amber-200 text-[11px] text-amber-800">
-                    Siswa ini belum mendaftarkan sidik jari. Daftarkan dulu lewat menu Students →
-                    Enroll Fingerprint agar bisa absen 2FA.
+                    Siswa ini belum mendaftarkan sidik jari maupun kartu RFID. Daftarkan dulu lewat menu
+                    Students → Enroll Fingerprint / RFID agar bisa absen 2FA.
                   </div>
                 ) : (
                   <div
@@ -702,26 +758,51 @@ export default function CameraKioskPage() {
                     <div>
                       <h4 className="text-xs font-bold text-blue-800">
                         {twofa?.state === "verified"
-                          ? "Sidik Jari Cocok — 2FA Lolos"
+                          ? twofa.matched_uid
+                            ? "Kartu RFID Cocok — 2FA Lolos"
+                            : "Sidik Jari Cocok — 2FA Lolos"
                           : twofa?.state === "failed"
-                            ? "Sidik Jari Salah 3x — sesi hangus"
+                            ? `${factorCause(twofa.reason)} — 3x salah, sesi hangus`
                             : twofa?.state === "expired"
                               ? "Waktu habis (30 dtk) — scan wajah ulang"
                               : twofa?.state === "error"
                                 ? `Sensor bermasalah: ${twofa.message ?? "ESP32 tidak terhubung"}`
-                                : "Langkah 2: Verifikasi Sidik Jari"}
+                                : "Langkah 2: Verifikasi Faktor Kedua (jari / kartu)"}
                       </h4>
                       {(!twofa || twofa.state === "waiting") && (
                         <p className="text-[11px] text-blue-900/70 mt-1 leading-relaxed">
-                          Tempelkan jari pada sensor <strong>R503</strong> di bawah webcam untuk menyelesaikan
-                          2FA.
+                          {lastResult.fingerprint_slot == null
+                            ? "Tap kartu RFID milik siswa ini pada reader untuk menyelesaikan 2FA."
+                            : "Tempelkan jari pada sensor R503 di bawah webcam, atau tap kartu RFID, untuk menyelesaikan 2FA."}
                         </p>
                       )}
-                      {twofa?.record && (
-                        <p className="text-[11px] text-emerald-800 font-semibold mt-1">
-                          Tercatat di server: <span className="uppercase">{twofa.record.status}</span> ({new Date(twofa.record.check_in_at).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" })})
+                      {twofa?.state === "waiting" && twofa.reason && (
+                        <p className="text-[11px] text-rose-700 mt-1 font-semibold">
+                          {factorCause(twofa.reason)} (percobaan {twofa.attempts ?? 1}/3). Pakai jari/kartu yang benar.
                         </p>
                       )}
+                      {twofa?.record &&
+                        (twofa.record.status === "present" || twofa.record.status === "late" ? (
+                          <p className="text-[11px] text-emerald-800 font-semibold mt-1">
+                            Absen{" "}
+                            <span className="uppercase">
+                              {twofa.record.action === "check_out" ? "pulang" : "masuk"}
+                            </span>{" "}
+                            tercatat: <span className="uppercase">{twofa.record.status}</span> (
+                            {new Date(
+                              twofa.record.action === "check_out" && twofa.record.check_out_at
+                                ? twofa.record.check_out_at
+                                : twofa.record.check_in_at
+                            ).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" })})
+                          </p>
+                        ) : (
+                          // failed/expired = baris audit, bukan absensi sah: jangan diberi label hijau.
+                          <p className="text-[11px] text-rose-700 mt-1 font-semibold">
+                            Percobaan tercatat sebagai audit{" "}
+                            <span className="uppercase">{twofa.record.status}</span> — bukan absensi. Scan wajah
+                            ulang untuk mencoba lagi.
+                          </p>
+                        ))}
                       {twofa?.recordError && (
                         <p className="text-[11px] text-rose-700 mt-1">
                           Gagal mencatat: {twofa.recordError}

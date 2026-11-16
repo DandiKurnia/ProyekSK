@@ -28,6 +28,7 @@ import type { ClassOption } from "@/lib/overview";
 interface AttendanceRow {
   id: string;
   time: string;
+  check_out_at: string | null;
   student_id: string;
   full_name: string;
   class_name: string;
@@ -37,6 +38,19 @@ interface AttendanceRow {
   status: "Present" | "Late" | "Pending" | "Failed" | "Expired" | "Absent";
   status_label?: string;
   is_live?: boolean;
+}
+
+/** ISO (UTC) -> jam WIB "HH:MM:SS"; string non-ISO dikembalikan apa adanya. */
+function hmWib(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Jakarta",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).format(d);
 }
 
 export default function AttendancePage() {
@@ -78,6 +92,7 @@ export default function AttendancePage() {
         rows?: {
           id: string;
           time: string;
+          check_out_at: string | null;
           student_id: string;
           full_name: string;
           class_name: string;
@@ -92,7 +107,8 @@ export default function AttendancePage() {
       setRows(
         (d.rows ?? []).map((r) => ({
           id: r.id,
-          time: r.time.includes("T") ? (r.time.split("T")[1]?.slice(0, 12) ?? r.time) : r.time,
+          time: hmWib(r.time),
+          check_out_at: r.check_out_at ? hmWib(r.check_out_at) : null,
           student_id: r.student_id,
           full_name: r.full_name,
           class_name: r.class_name,
@@ -132,7 +148,8 @@ export default function AttendancePage() {
   const exportCSV = () => {
     const headers = [
       "ID Transaksi",
-      "Waktu",
+      "Jam Masuk",
+      "Jam Pulang",
       "NIS/ID",
       "Nama Lengkap",
       "Kelas",
@@ -146,6 +163,7 @@ export default function AttendancePage() {
         [
           r.id,
           r.time,
+          r.check_out_at ?? "-",
           r.student_id,
           `"${r.full_name}"`,
           `"${r.class_name}"`,
@@ -327,7 +345,7 @@ export default function AttendancePage() {
                           {row.id}
                         </span>
                         <span className="font-mono text-[11px] text-aici-muted">
-                          • {row.time}
+                          • Masuk {row.time} • Pulang {row.check_out_at ?? "—"}
                         </span>
                       </div>
                       {row.status === "Present" && (
@@ -419,7 +437,8 @@ export default function AttendancePage() {
                 <thead>
                   <tr className="border-b border-aici-border text-[11px] font-semibold text-aici-muted uppercase tracking-wider">
                     <th className="py-3 px-3">ID Transaksi</th>
-                    <th className="py-3 px-3">Waktu</th>
+                    <th className="py-3 px-3">Masuk</th>
+                    <th className="py-3 px-3">Pulang</th>
                     <th className="py-3 px-3">NIS / ID</th>
                     <th className="py-3 px-3">Nama Lengkap</th>
                     <th className="py-3 px-3">Kelas</th>
@@ -453,9 +472,14 @@ export default function AttendancePage() {
                           </div>
                         </td>
 
-                        {/* Waktu */}
+                        {/* Masuk */}
                         <td className="py-3.5 px-3 font-mono text-[11px] text-aici-muted">
                           {row.time}
+                        </td>
+
+                        {/* Pulang */}
+                        <td className="py-3.5 px-3 font-mono text-[11px] text-aici-muted">
+                          {row.check_out_at ?? "—"}
                         </td>
 
                         {/* NIS / ID */}
@@ -679,6 +703,10 @@ export default function AttendancePage() {
               <div className="flex justify-between">
                 <span className="text-aici-muted">Waktu Check-in:</span>
                 <span className="font-mono">{selectedRow.time}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-aici-muted">Waktu Check-out:</span>
+                <span className="font-mono">{selectedRow.check_out_at ?? "—"}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-aici-muted">Status Final:</span>
