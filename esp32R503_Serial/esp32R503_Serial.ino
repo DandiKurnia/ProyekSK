@@ -4,25 +4,29 @@
 // Protokol baris (Line-based, 115200 baud) lewat kabel USB.
 // Serial Monitor Arduino IDE tetap bisa dipakai manual (perintah: e, d, c, m).
 //
-// Perintah dari laptop (Flask / Python):
 //   PING             -> "PONG <jumlah_template>"
 //   ENROLL <id>      -> "ENROLLING <id>" ... "ENROLL_OK <id>" / "ENROLL_FAIL <id> <kode>"
 //   DELETE <id>      -> "DELETE_OK <id>" / "DELETE_FAIL <id> <kode>"
 //   CLEAR            -> "CLEAR_OK 0" / "CLEAR_FAIL <kode>"
 //   LED_OK           -> "LED_DONE" (kedip hijau, dipakai saat absensi terverifikasi)
+//   CARD             -> "CARDWAIT" ... "CARD_OK <UID>" / "CARD_TIMEOUT" (jendela tempel kartu 15 detik)
+//   CANCEL           -> membatalkan jendela CARD yang sedang terbuka
 //
 // Event dari ESP32 ke laptop:
 //   BOOT <versi>              -> saat ESP32 menyala
-//   READY <jumlah_template>   -> sensor siap dipakai
+//   READY <jumlah_template> [RFID <nama_reader>] -> sensor siap dipakai
 //   SENSOR_FAIL 0             -> sensor tidak terdeteksi (cek wiring 3.3V / TX-RX)
 //   MATCH <id> <confidence>   -> sidik jari cocok
 //   NOMATCH                   -> sidik jari tidak dikenali
+//   CARD <UID>                -> kartu RFID ditempel (dipakai bila sesi verifikasi aktif)
 //   PLACE <id> / REMOVE       -> instruksi saat proses enroll
 // ==================================================
 
 #include <Adafruit_Fingerprint.h>  // Library protokol paket biner UART sensor sidik jari (R503 / AS608)
+#include <SPI.h>                   // Bus SPI untuk reader RFID RC522
+#include <MFRC522.h>               // Driver reader RFID RC522 (kartu MIFARE 13.56 MHz)
 
-#define FW_VERSION "1.0"           // Versi firmware yang dikirim saat ESP32 pertama kali menyala (BOOT)
+#define FW_VERSION "1.1"           // v1.1: tambah reader RFID RC522 (CARD/CARD_OK/CARD_TIMEOUT)
 
 // Konfigurasi pin UART2 pada ESP32 untuk berbicara dengan sensor R503
 #define RX_PIN      16             // Pin GPIO16 (RX2 ESP32) menerima data dari kabel Kuning (TX R503)
@@ -34,6 +38,21 @@ HardwareSerial fpSerial(2);
 
 // Membuat objek pengontrol sensor R503 yang terhubung di atas jalur UART2 (fpSerial)
 Adafruit_Fingerprint finger(&fpSerial);
+
+// Konfigurasi SPI untuk reader RFID RC522 (satu board dengan soket R503).
+// SCK=18, MISO=19, MOSI=23 (SPI default ESP32); SS & RST di bawah agar tidak
+// bertabrakan dengan UART2 R503 (16/17) maupun pin wakeup (4).
+#define RFID_SS_PIN   5            // GPIO5  -> SDA/SS RC522
+#define RFID_RST_PIN  27           // GPIO27 -> RST RC522
+#define CARD_WINDOW_MS 15000UL     // Jendela tempel kartu saat perintah CARD (15 detik)
+
+MFRC522 rfid(RFID_SS_PIN, RFID_RST_PIN);  // Objek reader RFID
+
+bool rfidSiap = false;            // false = reader tidak terdeteksi (lanjut tanpa kartu)
+bool cardWindow = false;          // true = jendela daftar kartu sedang terbuka
+uint32_t cardDeadline = 0;        // millis() batas akhir jendela daftar kartu
+String lastCardUid = "";          // UID terakhir; cegah event CARD berulang saat kartu menempel terus
+uint32_t lastCardAt = 0;          // millis() saat UID terakhir dikirim
 
 // ---------- LED helper (ring RGB R503) ----------
 // Mengatur cincin lampu LED pada sensor R503:
@@ -154,6 +173,39 @@ void verifikasi() {
   delay(300);                                         // Debounce tambahan agar tidak memicu bacaan ganda
 }
 
+// ---------- Pembacaan Kartu RFID (non-blocking, dipanggil tiap loop) ----------
+// UID sama tidak dikirim ulang lebih cepat dari 2 detik agar antrean serial
+// tidak kebanjiran bacaan ganda saat kartu menempel terus.
+String uidKeString(MFRC522::Uid *uid) {
+  String s = "";
+  for (byte i = 0; i < uid->size; i++) {
+    if (uid->uidByte[i] < 0x10) s += "0";
+    s += String(uid->uidByte[i], HEX);
+    if (i + 1 < uid->size) s += ":";
+  }
+  s.toUpperCase();
+  return s;
+}
+
+void cekKartu() {
+  if (!rfidSiap) return;
+  if (!rfid.PICC_IsNewCardPresent()) return;    // Tidak ada kartu: keluar tanpa menyentuh SPI lagi
+  if (!rfid.PICC_ReadCardSerial()) return;      // Gagal baca serial kartu
+  String uid = uidKeString(&rfid.uid);
+  rfid.PICC_HaltA();                            // Bebaskan kartu agar pembacaan berikutnya segar
+  if (uid.length() == 0) return;
+  if (uid == lastCardUid && (millis() - lastCardAt) < 2000) return;  // Debounce 2 dtk
+  lastCardUid = uid;
+  lastCardAt = millis();
+
+  if (cardWindow) {
+    cardWindow = false;                         // Jendela daftar: hasil sekali pakai
+    kirim(String("CARD_OK ") + uid);
+  } else {
+    kirim(String("CARD ") + uid);               // Di luar jendela: sesi 2FA yang menentukan pemilik
+  }
+}
+
 // ---------- Parser Perintah Serial dari Laptop (Flask / Serial Monitor) ----------
 void prosesPerintah(String baris) {
   baris.trim();                                       // Buang spasi/newline (\r\n) di awal & akhir baris
@@ -191,6 +243,24 @@ void prosesPerintah(String baris) {
     if (id >= 1 && id <= 200) {
       kirim(String("ENROLLING ") + id);
       enrollFinger((uint8_t)id);
+    }
+    return;
+  }
+  // 5a. CARD: buka jendela tempel kartu RFID (15 dtk). Hasil di loop() -> CARD_OK / CARD_TIMEOUT
+  if (baris == "CARD") {
+    if (!rfidSiap) { kirim("CARD_FAIL 0"); return; }
+    cardWindow = true;
+    cardDeadline = millis() + CARD_WINDOW_MS;
+    lastCardUid = "";                             // kartu yang sama boleh dipakai lagi
+    kirim("CARDWAIT");
+    return;
+  }
+
+  // 5b. CANCEL: tutup jendela kartu tanpa hasil (dipakai UI saat user membatalkan)
+  if (baris == "CANCEL") {
+    if (cardWindow) {
+      cardWindow = false;
+      kirim("CARD_TIMEOUT");
     }
     return;
   }
@@ -242,19 +312,37 @@ void setup() {
   // Sensor siap: baca jumlah template tersimpan dan nyalakan ring biru
   finger.getTemplateCount();
   kirim(String("READY ") + finger.templateCount);
+
+  // Inisialisasi reader RFID RC522 (bus SPI). Gagal -> firmware tetap jalan tanpa kartu.
+  SPI.begin();
+  rfid.PCD_Init();
+  byte v = rfid.PCD_ReadRegister(MFRC522::VersionReg);
+  rfidSiap = (v != 0x00 && v != 0xFF);
+  if (!rfidSiap) {
+    kirim("RFID_FAIL 0");                             // Reader tidak terdeteksi: cek 3.3V & kabel SPI
+  }
   ledBiru();
 }
 
 // ---------- Loop Utama (Berputar Terus-menerus Selama ESP32 Hidup) ----------
 void loop() {
-  // Prioritas 1: Jika ada perintah masuk dari laptop (PING, ENROLL, DELETE, CLEAR, LED_OK), jalankan dulu
+  // Prioritas 1: Jika ada perintah masuk dari laptop (PING, ENROLL, DELETE, CLEAR, LED_OK, CARD), jalankan dulu
   if (Serial.available()) {
     String baris = Serial.readStringUntil('\n');
     prosesPerintah(baris);
     return; // Kembali ke awal loop setelah menyelesaikan perintah
   }
 
-  // Prioritas 2: Jika tidak ada perintah, periksa apakah ada jari menempel untuk verifikasi absensi
+  // Prioritas 2: jendela daftar kartu lewat batas waktu -> lapor ke laptop
+  if (cardWindow && millis() >= cardDeadline) {
+    cardWindow = false;
+    kirim("CARD_TIMEOUT");
+  }
+
+  // Prioritas 3: kartu RFID menempel (non-blocking)
+  cekKartu();
+
+  // Prioritas 4: jari menempel untuk verifikasi absensi
   verifikasi();
 
   delay(50); // Jeda 50 ms (~20 pengecekan per detik) agar trafik UART tidak jenuh

@@ -130,10 +130,52 @@ def main():
 
     # --- Slot di luar 1..200 ditolak lokal ---
     check("enroll slot 0 ditolak", b.enroll(0)["ok"] is False)
+    # --- open_session slot 999 ditolak ---
     check("open_session slot 999 ditolak", b.open_session("S", 999)["ok"] is False)
 
+    # --- CARD tanpa sesi -> dibuang ---
+    ignored_before = b.status()["ignored_matches"]
+    fake.feed("CARD AA:BB:CC:DD")
+    time.sleep(0.3)
+    check("card tanpa sesi diabaikan", b.status()["ignored_matches"] == ignored_before + 1 and b.session()["state"] in ("idle", "expired") and b.status()["last_card"] == "AA:BB:CC:DD")
+
+    # --- Sesi 2FA: CARD milik siswa -> verified (method rfid) ---
+    b.open_session("S004", None, ttl=5, uids=["AA:BB:CC:DD"])
+    time.sleep(0.1)
+    fake.feed("CARD AA:BB:CC:DD")
+    time.sleep(0.3)
+    s = b.session()
+    check("sesi card verified", s["state"] == "verified" and s["student_id"] == "S004" and s.get("method") == "rfid" and s.get("matched_uid") == "AA:BB:CC:DD")
+
+    # --- Sesi 2FA: CARD milik siswa lain -> failed uid_mismatch ---
+    b.open_session("S005", None, ttl=5, uids=["11:22:33:44"])
+    for _ in range(3):
+        fake.feed("CARD FF:EE:DD:CC")
+        time.sleep(0.2)
+    s = b.session()
+    check("card asing 3x -> failed", s["state"] == "failed" and s["reason"] == "uid_mismatch" and s["attempts"] == 3)
+
+    # --- Jendela daftar kartu -> CARD_OK mengikat UID ---
+    b.open_card("S006")
+    check("perintah CARD terkirim", "CARD" in fake.written)
+    fake.feed("CARDWAIT")
+    time.sleep(0.3)
+    check("jendela kartu menunggu", b.card_status().get("stage") == "waiting")
+    fake.feed("CARD_OK 12:34:56:78")
+    time.sleep(0.3)
+    c = b.card_status()
+    check("card enroll ok", c.get("stage") == "done" and c.get("ok") is True and c.get("uid") == "12:34:56:78")
+
+    # --- Jendela dibatalkan -> done ok=False ---
+    b.open_card("S007")
+    fake.feed("CARDWAIT")
+    time.sleep(0.3)
+    b.cancel_card()
+    c = b.card_status()
+    check("card cancel done", c.get("stage") == "done" and c.get("ok") is False)
+
     b.stop()
-    print("\nSemua 13 cek lolos.")
+    print("\nSemua 20 cek lolos.")
 
 
 def check_api():
@@ -204,7 +246,24 @@ def check_api():
         threading.Thread(target=del_reply, daemon=True).start()
         r = c.delete("/fingerprint/12")
         print("delete 12:", r.status_code, r.json())
-        assert r.status_code == 200
+        # 5. RFID: buka jendela kartu -> CARD_OK mengikat UID (regresi: 500 KeyError 'error')
+        r = c.post("/rfid/enroll", json={"student_id": "S001"})
+        print("post /rfid/enroll:", r.status_code, r.json())
+        assert r.status_code == 202, r.text
+        fake.feed("CARDWAIT")
+        time.sleep(0.2)
+        assert c.get("/rfid/enroll/status").json()["stage"] == "waiting"
+        fake.feed("CARD_OK AA:BB:CC:DD")
+        time.sleep(0.3)
+        st = c.get("/rfid/enroll/status").json()
+        print("rfid status:", st)
+        assert st["stage"] == "done" and st["ok"] is True and st["uid"] == "AA:BB:CC:DD"
+
+        # 6. Serial mati -> 503, bukan 500
+        fpm.bridge.stop()
+        r = c.post("/rfid/enroll", json={"student_id": "S001"})
+        print("rfid tanpa serial:", r.status_code, r.json())
+        assert r.status_code == 503
 
     print("\nSMOKE_API_OK")
 

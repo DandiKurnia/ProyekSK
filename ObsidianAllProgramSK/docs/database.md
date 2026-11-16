@@ -148,6 +148,8 @@ Indeks `(step, expires_at)` untuk job penanda `expired`.
 **Unique `(student_id, class_id, date)`** — database adalah penjaga terakhir anti duplikat.
 Indeks `(class_id, date)` untuk rekap harian.
 
+**Faktor kedua tidak punya kolom khusus.** Baris yang lolos lewat kartu RFID tercatat dengan `fingerprint_slot = NULL` + `face_confidence` terisi; baris lewat jari mengisi `fingerprint_slot` + `fingerprint_score`. Tidak ada kolom `rfid_uid` di `attendance` — jangan menambahkannya tanpa migrasi.
+
 ## 9. Seats (denah statis)
 
 | Kolom | Tipe | Constraint | Keterangan |
@@ -206,6 +208,18 @@ Pengaturan sistem key-value (dibaca Route Handler, dikelola via `/settings`).
 | `value` | `jsonb` | NOT NULL | Nilai konfigurasi |
 | `updated_at` | `timestamptz` | NOT NULL DEFAULT `now()` | |
 
+## 14. RFID Cards (pemetaan kartu → siswa)
+
+Reader RC522 satu board dengan R503; firmware hanya melaporkan UID mentah. Tabel ini satu-satunya pemetaan kartu → pemilik.
+
+| Kolom | Tipe | Constraint | Keterangan |
+|---|---|---|---|
+| `uid` | `text` | PK | UID kartu, format `AA:BB:CC:DD` huruf besar |
+| `student_id` | `text` | FK → `students`, NOT NULL, ON DELETE CASCADE | Pemilik kartu |
+| `created_at` | `timestamptz` | NOT NULL DEFAULT `now()` | |
+
+Satu siswa boleh punya banyak kartu (1:N). Satu kartu hanya boleh menunjuk satu siswa: bind kartu yang sudah dipakai siswa lain ditolak `409` oleh `POST /api/rfid/enroll/status` (tidak menimpa diam-diam).
+
 ## Relasi Antar Entitas
 
 ```mermaid
@@ -213,6 +227,7 @@ erDiagram
     CLASSES ||--o{ STUDENTS : "memiliki"
     CLASSES ||--o{ ATTENDANCE : "pada kelas"
     STUDENTS ||--o{ ATTENDANCE : "mencatat"
+    STUDENTS ||--o{ RFID_CARDS : "memegang kartu"
     STUDENTS ||--o| ATTENDANCE_SESSIONS : "sesi"
     PROFILES ||--o{ TEACHER_CLASS_ASSIGNMENTS : "mengampu"
     CLASSES ||--o{ TEACHER_CLASS_ASSIGNMENTS : "diampu"
@@ -228,7 +243,7 @@ erDiagram
 
 ## DDL Acuan (Supabase SQL Editor) — Setup USB Serial
 
-> **Setup utama: jalankan §1–§5, §8–§13 saja. SKIP §6 (`device_commands`) + §7 (`attendance_sessions`)** — fallback Wi-Fi only. §7 gagal bila dijalankan tanpa §6 karena FK `fingerprint_command_id → device_commands` (error `42P01` yang kamu alami). §8 di bawah sudah tanpa kolom `session_id` agar tidak tergantung tabel parent yang di-skip.
+> **Setup utama: jalankan §1–§5, §8–§14 saja. SKIP §6 (`device_commands`) + §7 (`attendance_sessions`)** — fallback Wi-Fi only. §7 gagal bila dijalankan tanpa §6 karena FK `fingerprint_command_id → device_commands` (error `42P01` yang kamu alami). §8 di bawah sudah tanpa kolom `session_id` agar tidak tergantung tabel parent yang di-skip.
 
 ```sql
 -- Ekstensi untuk UUID
@@ -395,6 +410,14 @@ create table public.app_config (
   value      jsonb not null,
   updated_at timestamptz not null default now()
 );
+
+-- 14. RFID cards (pemetaan kartu -> siswa; satu siswa boleh banyak kartu)
+create table public.rfid_cards (
+  uid        text primary key,
+  student_id text not null references public.students (student_id) on delete cascade,
+  created_at timestamptz not null default now()
+);
+create index rfid_cards_student_idx on public.rfid_cards (student_id);
 ```
 
 ## Realtime yang Diaktifkan

@@ -272,9 +272,14 @@ class FingerJob(BaseModel):
 
 
 class FingerSession(BaseModel):
-    student_id: str = Field(..., min_length=1, description="NIS pemilik sesi 2FA")
-    slot: int = Field(..., ge=1, le=200, description="Slot sidik jari yang ditunggu")
+    student_id: str = Field(..., min_length=1, description="NIS pemilik sesi verifikasi")
+    slot: Optional[int] = Field(None, ge=1, le=200, description="Slot jari yang ditunggu (None = kartu-saja)")
+    uids: List[str] = Field(default_factory=list, description="UID kartu terikat siswa (huruf besar)")
     ttl: float = Field(30.0, ge=5, le=120, description="Umur sesi dalam detik")
+
+
+class RfidEnroll(BaseModel):
+    student_id: str = Field(..., min_length=1, description="NIS pemilik kartu")
 
 
 # Satu pekerjaan enroll dalam satu waktu: firmware tidak bisa melayani 2 enroll paralel.
@@ -351,10 +356,12 @@ def fingerprint_delete(slot: int):
     return {"slot": slot, "deleted": True}
 
 
-# --- ENDPOINT 9-11: SESI VERIFIKASI 2FA (WAJAH KUNCI -> TUNGGU JARI) ---
+# --- ENDPOINT 9-11: SESI VERIFIKASI (WAJAH KUNCI -> TUNGGU JARI ATAU KARTU) ---
 @app.post("/fingerprint/session", status_code=status.HTTP_201_CREATED)
 def fingerprint_session_open(req: FingerSession):
-    hasil = fp.bridge.open_session(req.student_id.strip(), req.slot, req.ttl)
+    hasil = fp.bridge.open_session(
+        req.student_id.strip(), req.slot, req.ttl, [u.strip().upper() for u in req.uids]
+    )
     if not hasil["ok"]:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=hasil["error"])
     return hasil
@@ -368,6 +375,28 @@ def fingerprint_session_get():
 @app.delete("/fingerprint/session")
 def fingerprint_session_cancel():
     return fp.bridge.cancel_session()
+
+
+# --- ENDPOINT 12-14: DAFTAR KARTU RFID (JENDELA 15 DETIK) ---
+@app.post("/rfid/enroll", status_code=status.HTTP_202_ACCEPTED)
+def rfid_enroll(req: RfidEnroll):
+    hasil = fp.bridge.open_card(req.student_id.strip())
+    if not hasil.get("started"):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=hasil.get("error", "jendela kartu gagal dibuka"),
+        )
+    return hasil
+
+
+@app.get("/rfid/enroll/status")
+def rfid_enroll_status():
+    return fp.bridge.card_status()
+
+
+@app.delete("/rfid/enroll")
+def rfid_enroll_cancel():
+    return fp.bridge.cancel_card()
 
 
 # --- ENDPOINT LED: KONFIRMASI FISIK SETELAH ABSENSI TERCATAT ---

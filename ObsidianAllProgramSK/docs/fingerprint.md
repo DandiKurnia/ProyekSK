@@ -47,8 +47,10 @@ Pemisah argumen adalah **spasi**. Firmware mem-`trim()` tiap baris dan mengabaik
 | `DELETE <id>` | `DELETE_OK <id> 0` / `DELETE_FAIL <id> <kode>` | Hapus 1 slot |
 | `CLEAR` | `CLEAR_OK 0` / `CLEAR_FAIL <kode>` | Hapus seluruh database sensor |
 | `LED_OK` | `LED_DONE` | Kedip hijau 700 ms; dipakai setelah absensi tercatat |
+| `CARD` | `CARDWAIT` … `CARD_OK <UID>` / `CARD_TIMEOUT` | Buka jendela tempel kartu RFID 15 detik (daftar kartu). UID format `AA:BB:CC:DD` huruf besar |
+| `CANCEL` | (tidak ada respons bila tidak ada jendela; `CARD_TIMEOUT` bila jendela sedang terbuka) | Tutup jendela `CARD` tanpa hasil |
 
-Alias khusus Serial Monitor: `e` (enroll interaktif), `d <id>`, `c`, `m`. Perintah tak dikenal → `ERR_UNKNOWN <perintah>`.
+Alias khusus Serial Monitor: `e` (enroll interaktif), `d <id>`, `c`, `m`. Perintah tak dikenal → `ERR_UNKNOWN <perintah>`. Perintah `CARD` tanpa reader (`rfidSiap` false) → `CARD_FAIL 0`.
 
 ### Event ESP32 → PC
 
@@ -56,6 +58,11 @@ Alias khusus Serial Monitor: `e` (enroll interaktif), `d <id>`, `c`, `m`. Perint
 |---|---|
 | `BOOT <versi>` | Saat boot (sebelum sensor diperiksa) |
 | `READY <jumlah_template>` | Handshake sensor sukses; LED biru bernapas |
+| `RFID_FAIL 0` | Reader RC522 tidak terdeteksi (register versi `0x00`/`0xFF`); firmware jalan tanpa kartu |
+| `CARDWAIT` | Jendela daftar kartu terbuka (balasan perintah `CARD`) |
+| `CARD <UID>` | Kartu ditempel di luar jendela daftar — sesi 2FA yang menentukan pemiliknya |
+| `CARD_OK <UID>` | Kartu tertangkap **di dalam** jendela daftar; jendela langsung tertutup |
+| `CARD_TIMEOUT` | Jendela 15 detik habis tanpa kartu, atau jendela dibatalkan `CANCEL` |
 | `SENSOR_FAIL 0` | `verifyPassword()` gagal — wiring 3.3V / TX-RX salah. Firmware **tidak** lock di `while(1)`, tetap menerima perintah |
 | `ENROLLING <id>` | Enroll dimulai |
 | `PLACE <id>` | Minta jari ditempel (dikirim 2x: sampel 1 dan 2) |
@@ -66,8 +73,9 @@ Alias khusus Serial Monitor: `e` (enroll interaktif), `d <id>`, `c`, `m`. Perint
 ### Yang TIDAK ada di firmware
 
 - **Tidak ada perintah `VERIFY`.** Pemindaian berjalan terus-menerus di `loop()`: setiap kali ada jari menempel, firmware langsung `fingerSearch()` 1:N lalu mengirim `MATCH`/`NOMATCH`. Tidak ada timeout sesi, tidak ada target slot.
-- **Tidak ada event `TIMEOUT` / `ERROR:<sebab>`.** Timeout 15 detik hanya berlaku internal di dalam `ENROLL`.
+- **Tidak ada event `ERROR:<sebab>`.** Timeout 15 detik hanya berlaku internal di `ENROLL` dan jendela `CARD`.
 - **Tidak ada `DELETE_ALL` bernama lain** — gunakan `CLEAR`.
+- **Kartu tidak menyimpan identitas siswa di dalam kartu.** `rfid_cards (uid, student_id)` di Supabase adalah satu-satunya pemetaan; firmware hanya melaporkan UID mentah.
 
 Konsekuensi desain: **gerbang sesi 2FA harus hidup di face service**, bukan di firmware. Face service yang menyimpan kandidat wajah + slot yang diharapkan + TTL, lalu mencocokkan event `MATCH` yang datang.
 
@@ -84,14 +92,29 @@ Konsekuensi desain: **gerbang sesi 2FA harus hidup di face service**, bukan di f
 
 **Blocking:** selama `ENROLL`, `loop()` tertahan sampai `enrollFinger()` selesai (maks ±2×15 detik) sehingga perintah lain (termasuk `PING`) antre. Absensi tidak bisa berjalan bersamaan dengan enrollment — satu laptop, satu siswa.
 
+## Proses Enrollment Kartu RFID
+
+1. Operator membuka `/students/enroll`, isi `student_id`, tekan **Daftarkan Kartu RFID** (atau **Tambah Kartu Lain** bila sudah ada).
+2. `POST /api/rfid/enroll` → face service `POST /rfid/enroll` → firmware `CARD` → `CARDWAIT`; jendela 15 detik terbuka.
+3. Siswa menempelkan kartu. Firmware kirim `CARD_OK <UID>`, jendela tertutup.
+4. UI polling `GET /api/rfid/enroll/status?student_id=…` tiap 700 ms; saat `stage=done, ok=true`, Route Handler:
+   - cek `rfid_cards.uid` belum dipakai siswa lain (kalau dipakai → `409`, tidak menimpa),
+   - `upsert rfid_cards (uid, student_id)` — satu siswa boleh punya banyak kartu.
+5. Daftar kartu tampil di kartu "Langkah 2 (alternatif)"; tombol hapus memanggil `DELETE /api/rfid/cards?uid=…`.
+6. Jendela habis tanpa kartu → `CARD_TIMEOUT`; UI menampilkan "Kartu tidak tertangkap dalam 15 detik. Ulangi."
+
+Kartu **menggantikan** sidik jari sebagai faktor kedua, bukan menambah faktor ketiga: absensi sah bila wajah cocok **dan** (slot jari cocok **atau** UID terikat cocok).
+
 ## Alur Pencocokan Sidik Jari (Mode Absensi)
 
-1. Face service mengenali wajah (YuNet live + SFace 1x, anti-stale: IoU + TTL) dan mengunci `student_id` + `fingerprint_slot` yang diharapkan untuk sesi 30 detik.
-2. Firmware, tanpa diminta, terus memindai. Siswa menempelkan jari.
-3. Firmware kirim `MATCH <slot> <confidence>` atau `NOMATCH`.
-4. Face service mencocokkan event dengan sesi aktif:
-   - `MATCH` dengan `<slot>` == slot siswa terkunci → **2FA sah**.
-   - `MATCH` dengan slot lain → **2FA gagal** (wajah ≠ jari), catat audit.
+1. Face service mengenali wajah (YuNet live + SFace 1x, anti-stale: IoU + TTL) dan mengunci `student_id` + `fingerprint_slot` yang diharapkan dan daftar `uids` kartu terikat untuk sesi 30 detik.
+2. Faktor kedua = **jari ATAU kartu**. Firmware, tanpa diminta, terus memindai jari sekaligus kartu:
+   - jari → `MATCH <slot> <confidence>` / `NOMATCH`;
+   - kartu → `CARD <UID>` (selalu dikirim saat kartu menempel, di dalam maupun di luar sesi).
+3. Face service mencocokkan event dengan sesi aktif:
+   - `MATCH` dengan `<slot>` == slot siswa terkunci → **2FA sah** (`method = fingerprint`).
+   - `CARD` dengan `<UID>` terdaftar untuk siswa terkunci → **2FA sah** (`method = rfid`, `matched_uid`).
+   - `MATCH` dengan slot lain / `CARD` milik siswa lain → **2FA gagal** (wajah ≠ faktor kedua), catat audit.
    - `NOMATCH` → gagal, siswa boleh ulangi (sesi masih hidup sampai TTL).
    - Tidak ada event sampai TTL habis → sesi `expired`.
 5. Setelah hasil final dikirim ke cloud dan tersimpan, face service kirim `LED_OK` → `LED_DONE` sebagai umpan balik hijau.
@@ -122,6 +145,11 @@ Konsekuensi desain: **gerbang sesi 2FA harus hidup di face service**, bukan di f
 | `SENSOR_FAIL 0` saat boot | Tandai sensor error; cek wiring 3.3V + TX/RX; ESP32 tetap menerima `PING` |
 | Sensor error saat pindai (`getImage` ≠ OK) | Firmware diam (tidak kirim event); face service hanya melihat TTL habis |
 | Enroll gagal di tengah | `ENROLL_FAIL <slot> <kode>`; slot tidak tersimpan; ulangi dari awal |
+| Kartu belum terdaftar untuk siswa | `CARD` dibuang (tidak ada di `uids` sesi); arahkan ke enrollment kartu di `/students/enroll` |
+| Kartu terikat siswa lain | Tolak + log audit (sama seperti slot jari milik siswa lain) |
+| Dua kartu menempel berdekatan | Debounce firmware 2 dtk per UID; event pertama yang dipakai sesi |
+| Reader RC522 tidak terpasang | `RFID_FAIL 0` saat boot; `CARD` → `CARD_FAIL 0`; jalur sidik jari tetap normal |
+| UID kartu sudah dipakai siswa lain saat enroll | Route Handler menolak `409` (`kartu <uid> sudah terdaftar untuk siswa <X>`) — tidak menimpa diam-diam |
 
 ## Diagram Flowchart
 

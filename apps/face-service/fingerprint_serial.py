@@ -1,17 +1,20 @@
-"""Jembatan USB Serial ke firmware ESP32 + R503 (`esp32R503_Serial.ino` v1.0).
+"""Jembatan USB Serial ke firmware ESP32 gabungan (R503 + RC522 RFID, satu board).
 
 Peran modul ini:
 1. Buka COM port, baca baris event dari firmware, kirim perintah.
-2. Jalankan perintah sinkron (PING/ENROLL/DELETE/CLEAR/LED_OK) dengan timeout.
-3. Simpan **sesi 2FA** lokal: firmware memindai 1:N terus-menerus tanpa perintah
-   `VERIFY`, jadi yang menentukan "MATCH ini milik siapa" adalah sesi di sini.
+2. Jalankan perintah sinkron (PING/ENROLL/DELETE/CLEAR/LED_OK/CARD) dengan timeout.
+3. Simpan **sesi verifikasi** lokal: firmware memindai 1:N terus-menerus tanpa
+   perintah `VERIFY`, jadi yang menentukan "MATCH/CARD ini milik siapa" adalah
+   sesi di sini.
 
 Aturan sesi (lihat ObsidianAllProgramSK/docs/fingerprint.md):
-- Sesi dibuka saat wajah terkunci: `open_session(student_id, slot, ttl)`.
-- Hanya event `MATCH <slot> <confidence>` **setelah** sesi dibuka yang dihitung;
-  `MATCH` di luar sesi dibuang (`ignored_matches`).
-- Slot cocok -> `verified`. Slot lain / `NOMATCH` -> percobaan bertambah;
-  habis `max_attempts` -> `failed`. Lewat TTL -> `expired`.
+- Sesi dibuka saat wajah terkunci: `open_session(student_id, slot, uids, ttl)`.
+  `slot` = slot jari yang ditunggu (boleh None), `uids` = kartu terikat siswa.
+- Hanya event `MATCH <slot> <conf>` / `CARD <uid>` **setelah** sesi dibuka yang
+  dihitung; event di luar sesi dibuang.
+- Salah satu faktor cocok -> `verified` (`method` = fingerprint|rfid). Faktor
+  salah -> percobaan bertambah; habis `MAX_ATTEMPTS` -> `failed`. Lewat TTL -> `expired`.
+- Jendela daftar kartu terpisah: `open_card()` -> `CARD_OK <uid>` / `CARD_TIMEOUT`.
 
 Threading: satu thread pembaca baris; semua state dikunci `_lock`.
 """
@@ -73,8 +76,11 @@ class FingerprintBridge:
         self.firmware = ""
         self.template_count = 0
         self.last_event = ""  # Baris terakhir mentah (untuk /fingerprint/status)
-        self.ignored_matches = 0  # MATCH datang tanpa sesi aktif
-        self._enroll: Optional[dict] = None  # Progres ENROLL untuk polling UI
+        self.ignored_matches = 0  # MATCH/CARD datang tanpa sesi aktif
+        self.last_card = ""  # UID kartu terakhir (untuk /rfid/status)
+        self.last_rfid = ""  # Nama reader dari baris READY ("" = belum dilaporkan)
+        self._enroll: Optional[dict] = None  # Progres ENROLL jari untuk polling UI
+        self._card: Optional[dict] = None  # Jendela daftar kartu untuk polling UI
         self._session: dict = {"state": "idle"}
 
     # ---------- Koneksi ----------
@@ -147,6 +153,7 @@ class FingerprintBridge:
             elif verb == "READY":
                 self.sensor_ok = True
                 self.template_count = _int(args, 0, self.template_count)
+                self.last_rfid = " ".join(args[1:])  # "READY <n> RFID" -> nama reader
             elif verb == "SENSOR_FAIL":
                 self.sensor_ok = False
             elif verb == "PONG":
@@ -173,43 +180,79 @@ class FingerprintBridge:
                 )
             elif verb == "REMOVE" and self._enroll:
                 self._enroll["stage"] = "wait_finger_2"
+            elif verb == "CARDWAIT" and self._card:
+                self._card["stage"] = "waiting"  # Jendela enroll kartu dibuka firmware
+            elif verb in ("CARD", "CARD_OK"):
+                uid = (args[0] if args else "").upper()
+                if uid:
+                    self.last_card = uid
+                    self._apply_card(uid)
+                    if self._card and self._card.get("stage") in ("sending", "waiting"):
+                        self._card.update(stage="done", ok=True, uid=uid)
+            elif verb == "CARD_TIMEOUT" and self._card:
+                self._card.update(stage="done", ok=False)
             elif verb in ("MATCH", "NOMATCH"):
                 self._apply_match(verb, args)
 
             self._new.notify_all()  # Bangunkan penunggu perintah/sesi
 
     def _apply_match(self, verb: str, args: list[str]) -> None:
-        """Terapkan aturan sesi 2FA. Dipanggil sudah di dalam `_lock`."""
+        """Terapkan event sidik jari ke sesi. Dipanggil sudah di dalam `_lock`."""
         s = self._session
-        active = s.get("state") == "waiting" and time.time() < s.get("deadline", 0)
-        if not active:
-            if s.get("state") == "waiting":
-                self._session = {**s, "state": "expired", "reason": "timeout"}
+        if not self._session_active(s):
             self.ignored_matches += 1  # Jari di luar sesi: bukan absensi
             return
 
         if verb == "NOMATCH":
-            s["attempts"] = s.get("attempts", 0) + 1
-            s["reason"] = "no_match"
-            if s["attempts"] >= MAX_ATTEMPTS:
-                s["state"], s["reason"] = "failed", "no_match"
+            self._fail_attempt(s, "no_match")
             return
 
         slot = _int(args, 0, -1)
         score = _int(args, 1, 0)
-        if slot == s["slot"]:
+        if s.get("slot") is not None and slot == s["slot"]:
             s.update(
                 state="verified",
+                method="fingerprint",
                 matched_slot=slot,
                 score=score,
                 reason="ok",
-                verified_at=time.time(),  # dipakai Route Handler untuk batas umur bukti 2FA
+                verified_at=time.time(),  # dipakai Route Handler untuk batas umur bukti
             )
             return
 
         # Wajah siswa A tetapi jari slot lain (milik siswa B)
+        s.update(matched_slot=slot, score=score)
+        self._fail_attempt(s, "slot_mismatch")
+
+    def _apply_card(self, uid: str) -> None:
+        """Terapkan tap kartu ke sesi. Dipanggil sudah di dalam `_lock`."""
+        s = self._session
+        if not self._session_active(s):
+            self.ignored_matches += 1  # Tap di luar sesi: bukan absensi
+            return
+        if uid in (s.get("uids") or ()):
+            s.update(
+                state="verified",
+                method="rfid",
+                matched_uid=uid,
+                reason="ok",
+                verified_at=time.time(),
+            )
+            return
+        s["matched_uid"] = uid
+        self._fail_attempt(s, "uid_mismatch")
+
+    def _session_active(self, s: dict) -> bool:
+        if s.get("state") == "waiting" and time.time() < s.get("deadline", 0):
+            return True
+        if s.get("state") == "waiting":
+            self._session = {**s, "state": "expired", "reason": "timeout"}
+        return False
+
+    def _fail_attempt(self, s: dict, reason: str) -> None:
+        """Satu percobaan salah; habis `MAX_ATTEMPTS` -> sesi gagal. Di dalam `_lock`."""
         s["attempts"] = s.get("attempts", 0) + 1
-        s.update(matched_slot=slot, score=score, reason="slot_mismatch")
+        s["reason"] = reason
         if s["attempts"] >= MAX_ATTEMPTS:
             s["state"] = "failed"
 
@@ -299,24 +342,68 @@ class FingerprintBridge:
         hit = self._wait(("LED_DONE",), timeout)
         return {"ok": bool(hit)}
 
-    # ---------- Sesi 2FA ----------
-    def open_session(self, student_id: str, slot: int, ttl: float = DEFAULT_TTL) -> dict:
-        if not 1 <= slot <= 200:
+    # ---------- Sesi verifikasi ----------
+    def open_session(
+        self,
+        student_id: str,
+        slot: Optional[int],
+        ttl: float = DEFAULT_TTL,
+        uids: Optional[list] = None,
+    ) -> dict:
+        """Buka sesi tunggu faktor kedua. `slot` boleh None (siswa kartu-saja)."""
+        if slot is not None and not 1 <= slot <= 200:
             return {"ok": False, "error": "slot harus 1..200"}
+        if slot is None and not uids:
+            return {"ok": False, "error": "siswa belum enroll sidik jari maupun kartu"}
         with self._lock:
             self._session = {
                 "state": "waiting",
                 "student_id": student_id,
                 "slot": slot,
+                "uids": list(uids or ()),
+                "method": None,
                 "attempts": 0,
                 "reason": None,
                 "matched_slot": None,
+                "matched_uid": None,
                 "score": None,
                 "opened_at": time.time(),
                 "deadline": time.time() + ttl,
             }
             self._new.notify_all()
         return {"ok": True, **self.session()}
+
+    CARD_WINDOW = 15.0  # Jendela tempel kartu saat enroll (detik)
+
+    def open_card(self, student_id: str) -> dict:
+        """Minta firmware membuka jendela daftar kartu; hasil via `card_status()`."""
+        if not self._send("CARD"):
+            return {"ok": False, "error": "serial tidak terhubung"}
+        with self._lock:
+            self._card = {
+                "student_id": student_id,
+                "stage": "sending",
+                "ok": None,
+                "uid": None,
+                "started_at": time.time(),
+                "deadline": time.time() + self.CARD_WINDOW,
+            }
+        return {"started": True, **self.card_status()}  # kunci `started`, bukan `ok` - card_status() punya `ok` sendiri (None saat menunggu)
+
+    def card_status(self) -> dict:
+        with self._lock:
+            c = dict(self._card) if self._card else {}
+            if c.get("stage") in ("sending", "waiting") and time.time() >= c.get("deadline", 0):
+                c.update(stage="done", ok=False)
+                self._card = dict(c)
+            return c
+
+    def cancel_card(self) -> dict:
+        self._send("CANCEL")
+        with self._lock:
+            if self._card and self._card.get("ok") is None:
+                self._card.update(stage="done", ok=False)
+            return dict(self._card) if self._card else {}
 
     def session(self) -> dict:
         with self._lock:
@@ -348,6 +435,9 @@ class FingerprintBridge:
                 "template_count": self.template_count,
                 "last_event": self.last_event,
                 "ignored_matches": self.ignored_matches,
+                "last_card": self.last_card,
+                "rfid": self.last_rfid,
+                "card": self.card_status(),
                 "enroll": dict(self._enroll) if self._enroll else None,
                 "session": self.session(),
             }

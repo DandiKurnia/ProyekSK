@@ -14,11 +14,25 @@ import {
   Layers,
   Sparkles,
   Fingerprint,
+  CreditCard,
 } from "lucide-react";
 import { Sidebar } from "@/components/Sidebar";
 import { Topbar } from "@/components/Topbar";
 import { useOvalGuide } from "@/lib/oval-guide";
 import type { ClassOption } from "@/lib/overview";
+
+type StudentCandidate = {
+  student_id: string;
+  full_name: string;
+  face_status: string;
+  rfid_uid?: string[];
+};
+
+type RfidState = {
+  state: "idle" | "running" | "done" | "error";
+  message?: string;
+  uid?: string;
+};
 
 const SAMPLES_GUIDE = [
   { id: 1, label: "Lurus (Center)", hint: "Hadap kamera lurus, ekspresi netral" },
@@ -54,7 +68,7 @@ export default function StudentFaceEnrollPage() {
 
   const [studentId, setStudentId] = useState("");
   const [fullName, setFullName] = useState("");
-  const [candidates, setCandidates] = useState<Array<{ student_id: string; full_name: string; face_status: string }>>([]);
+  const [candidates, setCandidates] = useState<StudentCandidate[]>([]);
   const [loadingCandidates, setLoadingCandidates] = useState(true);
   // Kandidat dari Supabase + pre-fill dari tabel: /students/enroll?student_id=S001&name=Ahmad
   useEffect(() => {
@@ -68,7 +82,7 @@ export default function StudentFaceEnrollPage() {
         const res = await fetch("/api/students");
         if (res.ok) {
           const data = await res.json();
-          const list = (data.students ?? []) as Array<{ student_id: string; full_name: string; face_status: string }>;
+          const list = (data.students ?? []) as StudentCandidate[];
           setCandidates(list);
           // Jika pre-fill cocok dengan kandidat, sinkronkan nama otomatis
           if (sid && !nm) {
@@ -312,6 +326,87 @@ export default function StudentFaceEnrollPage() {
       }, 700);
     } catch (err: unknown) {
       setFp({ state: "error", message: err instanceof Error ? err.message : "Gagal memulai enrollment sidik jari" });
+    }
+  };
+  // --- Kartu RFID (faktor 2 alternatif) — RC522 satu board dengan R503 ---
+  const [rfid, setRfid] = useState<RfidState>({ state: "idle" });
+  const rfidPoll = useRef<number | null>(null);
+  useEffect(() => () => { if (rfidPoll.current) window.clearInterval(rfidPoll.current); }, []);
+  const boundCards = candidates.find((c) => c.student_id === studentId.trim())?.rfid_uid ?? [];
+
+  const reloadCards = async () => {
+    try {
+      const res = await fetch("/api/students", { cache: "no-store" });
+      if (!res.ok) return;
+      const data = await res.json();
+      setCandidates((data.students ?? []) as StudentCandidate[]);
+    } catch {
+      // Daftar kartu hanya tampilan; kegagalan tidak memblokir enrollment
+    }
+  };
+
+  const startRfid = async () => {
+    const cleanId = studentId.trim();
+    if (!cleanId) return;
+    setRfid({ state: "running", message: "Membuka jendela tempel kartu..." });
+    try {
+      const res = await fetch("/api/rfid/enroll", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ student_id: cleanId }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      const startedAt = Date.now();
+      setRfid({ state: "running", message: "Tempel kartu RFID ke reader" });
+
+      rfidPoll.current = window.setInterval(async () => {
+        try {
+          const r = await fetch(
+            `/api/rfid/enroll/status?student_id=${encodeURIComponent(cleanId)}`,
+            { cache: "no-store" }
+          );
+          const s = await r.json();
+          if (!r.ok) {
+            window.clearInterval(rfidPoll.current!);
+            rfidPoll.current = null;
+            setRfid({ state: "error", message: s.error ?? `HTTP ${r.status}` });
+            return;
+          }
+          if (s.stage === "done") {
+            window.clearInterval(rfidPoll.current!);
+            rfidPoll.current = null;
+            setRfid(
+              s.ok && s.uid
+                ? { state: "done", message: `Kartu ${s.uid} terikat & tersimpan.`, uid: s.uid }
+                : { state: "error", message: "Kartu tidak tertangkap dalam 15 detik. Ulangi." }
+            );
+            void reloadCards();
+          } else {
+            const left = Math.max(0, 15 - Math.round((Date.now() - startedAt) / 1000));
+            setRfid({ state: "running", message: `Menunggu kartu... • ${left} dtk` });
+          }
+        } catch {
+          // Jaringan putus sesaat: polling berikutnya mencoba lagi
+        }
+      }, 700);
+    } catch (err: unknown) {
+      setRfid({
+        state: "error",
+        message: err instanceof Error ? err.message : "Gagal memulai pendaftaran kartu",
+      });
+    }
+  };
+
+  const unbindCard = async (uid: string) => {
+    try {
+      const res = await fetch(`/api/rfid/cards?uid=${encodeURIComponent(uid)}`, { method: "DELETE" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      setRfid({ state: "idle", message: `Kartu ${uid} dilepas.` });
+      await reloadCards();
+    } catch (err: unknown) {
+      setRfid({ state: "error", message: err instanceof Error ? err.message : "Gagal melepas kartu" });
     }
   };
 
@@ -780,6 +875,65 @@ export default function StudentFaceEnrollPage() {
                   >
                     <Fingerprint className="w-4 h-4" />
                     <span>{fp.state === "running" ? "Sensor merekam..." : "Daftarkan Sidik Jari"}</span>
+                  </button>
+                </div>
+
+                {/* Langkah 2 (alternatif): kartu RFID — RC522 satu board dengan R503 */}
+                <div className="p-4 bg-aici-surface rounded-2xl border border-aici-border/60 text-xs space-y-2">
+                  <p className="font-semibold text-aici-dark flex items-center gap-2">
+                    <CreditCard className="w-4 h-4" /> Langkah 2 (alternatif) — Kartu RFID
+                  </p>
+                  <p className="text-[11px] text-aici-muted">
+                    Kartu bisa menggantikan sidik jari sebagai faktor kedua. Tempel kartu
+                    saat jendela 15 detik terbuka.
+                  </p>
+                  {boundCards.length > 0 && (
+                    <ul className="space-y-1">
+                      {boundCards.map((uid) => (
+                        <li
+                          key={uid}
+                          className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg bg-aici-surface-nested border border-aici-border/60"
+                        >
+                          <span className="font-mono text-[11px] text-aici-dark">{uid}</span>
+                          <button
+                            type="button"
+                            onClick={() => unbindCard(uid)}
+                            className="p-1 rounded-md text-aici-muted hover:text-aici-error hover:bg-white transition-colors"
+                            title={`Lepas kartu ${uid}`}
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  {rfid.state !== "idle" && rfid.message && (
+                    <p
+                      className={
+                        rfid.state === "done"
+                          ? "text-aici-success font-semibold"
+                          : rfid.state === "error"
+                            ? "text-aici-error font-semibold"
+                            : "text-aici-muted"
+                      }
+                    >
+                      {rfid.message}
+                    </p>
+                  )}
+                  <button
+                    type="button"
+                    onClick={startRfid}
+                    disabled={rfid.state === "running" || !studentId.trim()}
+                    className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl border border-aici-border hover:bg-aici-surface-nested text-xs font-bold text-aici-dark transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <CreditCard className="w-4 h-4" />
+                    <span>
+                      {rfid.state === "running"
+                        ? "Menunggu kartu..."
+                        : boundCards.length > 0
+                          ? "Tambah Kartu Lain"
+                          : "Daftarkan Kartu RFID"}
+                    </span>
                   </button>
                 </div>
               </form>

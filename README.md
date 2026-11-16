@@ -120,10 +120,10 @@ smart-classroom-attendance/
 | Tahap | Status |
 |---|---|
 | Perancangan arsitektur | Selesai (dokumen ini) |
-| Implementasi service pengenalan wajah | Belum dimulai |
-| Implementasi backend NestJS | Belum dimulai |
-| Implementasi dashboard Next.js | Belum dimulai |
-| Firmware ESP32 (fingerprint & load cell) | Belum dimulai |
+| Implementasi service pengenalan wajah | Sebagian: FastAPI `/health` `/recognize` `/enroll` + jembatan serial R503/RC522 + 7 halaman web |
+| Implementasi dashboard Next.js | Sebagian: Overview, Attendance, Students, Classes & Seats, Devices, Reports, Settings, Login; data live Supabase |
+| Firmware ESP32 (fingerprint & kartu RFID) | Kode selesai (`esp32R503_Serial/`), belum diuji di perangkat — butuh library `Adafruit Fingerprint Sensor` + `MFRC522` |
+| Firmware ESP32 load cell (kursi) | Belum dimulai |
 | Deployment dan pengujian lapangan | Belum dimulai |
 
 ## Catatan Kebutuhan Perangkat dan Keamanan
@@ -131,7 +131,7 @@ smart-classroom-attendance/
 **Kebutuhan perangkat (rancangan awal):**
 
 - Komputer kelas dengan webcam dan CPU mampu menjalankan pengenalan wajah berbasis CPU (Python 3.11 + OpenCV).
-- ESP32 + sensor fingerprint R503 untuk verifikasi sidik jari.
+- ESP32 + sensor fingerprint R503 untuk verifikasi sidik jari, satu board dengan reader RC522 (13,56 MHz) untuk kartu RFID sebagai faktor kedua alternatif.
 - ESP32 + load cell + modul HX711 untuk monitoring kursi.
 - Koneksi internet keluar dari jaringan sekolah (tanpa perubahan router/Wi-Fi).
 

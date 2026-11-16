@@ -139,19 +139,25 @@ export async function POST(request: Request) {
     const studentId = typeof body?.student_id === "string" ? body.student_id.trim() : "";
     if (!studentId) return NextResponse.json({ error: "student_id wajib diisi" }, { status: 400 });
 
-    // 1. Identitas siswa + slot terdaftar (sumber kebenaran pemetaan wajah<->jari)
-    const stu = await supabaseServer
-      .from("students")
-      .select("student_id, class_id, full_name, fingerprint_slot")
-      .eq("student_id", studentId)
-      .eq("is_active", true)
-      .maybeSingle();
+    // 1. Identitas siswa + faktor kedua terdaftar (jari ATAU kartu)
+    const [stu, cards] = await Promise.all([
+      supabaseServer
+        .from("students")
+        .select("student_id, class_id, full_name, fingerprint_slot")
+        .eq("student_id", studentId)
+        .eq("is_active", true)
+        .maybeSingle(),
+      supabaseServer.from("rfid_cards").select("uid").eq("student_id", studentId),
+    ]);
     if (stu.error) throw stu.error;
+    if (cards.error) throw cards.error;
     if (!stu.data?.class_id) return NextResponse.json({ error: "siswa tidak dikenal/aktif" }, { status: 404 });
-    if (!stu.data.fingerprint_slot)
-      return NextResponse.json({ error: "siswa belum enroll sidik jari" }, { status: 403 });
+    const boundUids = (cards.data ?? []).map((c) => String(c.uid).toUpperCase());
+    if (!stu.data.fingerprint_slot && boundUids.length === 0)
+      return NextResponse.json({ error: "siswa belum enroll sidik jari maupun kartu" }, { status: 403 });
 
-    // 2. Bukti 2FA: sesi di face-service harus verified untuk siswa ini + slot cocok + masih segar
+    // 2. Bukti 2FA: sesi di face-service harus verified untuk siswa ini + masih segar.
+    //    Faktor cocok = slot cocok (jari) ATAU UID terikat (kartu).
     const sess = await faceFetch("/fingerprint/session");
     if (sess.status !== 200 || !sess.data || typeof sess.data !== "object")
       return NextResponse.json({ error: "face-service tidak terjangkau" }, { status: 502 });
@@ -162,9 +168,15 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: `sesi belum verified (state: ${sState})` }, { status: 409 });
     if (s.student_id !== studentId)
       return NextResponse.json({ error: "bukti 2FA bukan milik siswa ini" }, { status: 403 });
+    const matchedUid =
+      typeof s.matched_uid === "string" ? s.matched_uid.toUpperCase() : null;
+    const factorOk =
+      (stu.data.fingerprint_slot != null &&
+        Number(s.matched_slot) === Number(stu.data.fingerprint_slot)) ||
+      (matchedUid != null && boundUids.includes(matchedUid));
     if (!isAudit) {
-      // bukti sah hanya jika slot cocok + masih segar
-      if (Number(s.matched_slot) !== Number(stu.data.fingerprint_slot))
+      // bukti sah hanya jika salah satu faktor cocok + masih segar
+      if (!factorOk)
         return NextResponse.json({ error: "bukti 2FA bukan milik siswa ini" }, { status: 403 });
       const verifiedAt = Number(s.verified_at ?? 0);
       if (!verifiedAt || Date.now() / 1000 - verifiedAt > SESSION_MAX_AGE_S)
@@ -184,13 +196,17 @@ export async function POST(request: Request) {
     //    audit failed/expired -> insert-only supaya tidak menurunkan baris present/late.
     const finalStatus = isAudit ? sState : lateTime && nowHm > lateTime ? "late" : "present";
     const faceConfidence = s.face_confidence;
+    // Bukti yang benar-benar dipakai: kartu (kalau cocok) didahulukan, sisanya slot jari.
+    // Skema `attendance` tidak punya kolom rfid_uid; kartu terekam sebagai fingerprint_slot NULL.
+    const usedUid = factorOk && matchedUid && boundUids.includes(matchedUid) ? matchedUid : null;
     const row = {
       student_id: studentId,
       class_id: stu.data.class_id,
       date: nowDate,
       check_in_at: new Date().toISOString(),
       face_confidence: typeof faceConfidence === "number" ? faceConfidence : null,
-      fingerprint_slot: Number(stu.data.fingerprint_slot),
+      fingerprint_slot: usedUid ? null : stu.data.fingerprint_slot,
+      // tidak ada kolom rfid_uid di attendance - JANGAN tambahkan tanpa migrasi
       status: finalStatus,
     };
     const write = isAudit

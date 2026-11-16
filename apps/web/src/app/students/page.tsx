@@ -7,6 +7,7 @@ import {
   UserPlus,
   ScanFace,
   Fingerprint,
+  CreditCard,
   CheckCircle2,
   Clock,
   ShieldCheck,
@@ -24,6 +25,8 @@ interface StudentItem {
   face_status: "enrolled" | "not_enrolled" | "pending";
   fingerprint_status: "enrolled" | "not_enrolled" | "pending";
   fingerprint_slot: number | null;
+  rfid_uid: string[];
+  rfid_status: "enrolled" | "not_enrolled";
   is_active: boolean;
 }
 
@@ -65,6 +68,8 @@ export default function StudentsPage() {
           face_status: "enrolled",
           fingerprint_status: "enrolled",
           fingerprint_slot: 1,
+          rfid_uid: [],
+          rfid_status: "not_enrolled",
           is_active: true,
         },
         {
@@ -75,6 +80,8 @@ export default function StudentsPage() {
           face_status: "not_enrolled",
           fingerprint_status: "not_enrolled",
           fingerprint_slot: null,
+          rfid_uid: [],
+          rfid_status: "not_enrolled",
           is_active: true,
         },
       ]);
@@ -152,12 +159,12 @@ export default function StudentsPage() {
         !q ||
         s.student_id.toLowerCase().includes(q) ||
         s.full_name.toLowerCase().includes(q);
+      // "Siap absen" = wajah terdaftar + salah satu faktor kedua (jari ATAU kartu).
+      const ready = (s: StudentItem) =>
+        s.face_status === "enrolled" &&
+        (s.fingerprint_status === "enrolled" || s.rfid_status === "enrolled");
       const matchStatus =
-        statusFilter === "all"
-          ? true
-          : statusFilter === "enrolled"
-          ? s.face_status === "enrolled" && s.fingerprint_status === "enrolled"
-          : s.face_status !== "enrolled" || s.fingerprint_status !== "enrolled";
+        statusFilter === "all" ? true : statusFilter === "enrolled" ? ready(s) : !ready(s);
       return matchQuery && matchStatus;
     });
   }, [students, search, statusFilter]);
@@ -166,10 +173,13 @@ export default function StudentsPage() {
     const total = students.length;
     const faceComplete = students.filter((s) => s.face_status === "enrolled").length;
     const fpComplete = students.filter((s) => s.fingerprint_status === "enrolled").length;
+    const cardComplete = students.filter((s) => s.rfid_status === "enrolled").length;
     const fullyEnrolled = students.filter(
-      (s) => s.face_status === "enrolled" && s.fingerprint_status === "enrolled"
+      (s) =>
+        s.face_status === "enrolled" &&
+        (s.fingerprint_status === "enrolled" || s.rfid_status === "enrolled")
     ).length;
-    return { total, faceComplete, fpComplete, fullyEnrolled };
+    return { total, faceComplete, fpComplete, cardComplete, fullyEnrolled };
   }, [students]);
 
   return (
@@ -209,7 +219,7 @@ export default function StudentsPage() {
           </div>
 
           {/* Quick KPI Strip */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
             <div className="p-3.5 bg-aici-surface rounded-xl border border-aici-border/60">
               <span className="text-[11px] font-semibold text-aici-muted">Total Siswa</span>
               <p className="text-xl font-bold font-mono text-aici-dark mt-0.5">{stats.total}</p>
@@ -224,6 +234,12 @@ export default function StudentsPage() {
               <span className="text-[11px] font-semibold text-aici-muted">Sidik Jari Terdaftar</span>
               <p className="text-xl font-bold font-mono text-blue-600 mt-0.5">
                 {stats.fpComplete} <span className="text-xs text-aici-muted font-normal">/ {stats.total}</span>
+              </p>
+            </div>
+            <div className="p-3.5 bg-aici-surface rounded-xl border border-aici-border/60">
+              <span className="text-[11px] font-semibold text-aici-muted">Kartu RFID</span>
+              <p className="text-xl font-bold font-mono text-violet-600 mt-0.5">
+                {stats.cardComplete} <span className="text-xs text-aici-muted font-normal">/ {stats.total}</span>
               </p>
             </div>
             <div className="p-3.5 bg-aici-surface rounded-xl border border-aici-border/60">
@@ -301,6 +317,7 @@ export default function StudentsPage() {
                     <th className="py-3 px-3">Kelas</th>
                     <th className="py-3 px-3 text-center">Wajah (YuNet + SFace)</th>
                     <th className="py-3 px-3 text-center">Sidik Jari (R503)</th>
+                    <th className="py-3 px-3 text-center">Kartu (RC522)</th>
                     <th className="py-3 px-3 text-center">Status 2FA</th>
                     <th className="py-3 px-3 text-right">Aksi</th>
                   </tr>
@@ -308,7 +325,7 @@ export default function StudentsPage() {
                 <tbody className="divide-y divide-aici-border/50">
                   {filtered.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="py-8 text-center text-aici-muted">
+                      <td colSpan={8} className="py-8 text-center text-aici-muted">
                         Tidak ada data siswa yang cocok dengan filter.
                       </td>
                     </tr>
@@ -316,7 +333,8 @@ export default function StudentsPage() {
                     filtered.map((student) => {
                       const isComplete =
                         student.face_status === "enrolled" &&
-                        student.fingerprint_status === "enrolled";
+                        (student.fingerprint_status === "enrolled" ||
+                          student.rfid_status === "enrolled");
 
                       return (
                         <tr key={student.student_id} className="hover:bg-aici-surface-nested/50 transition-colors">
@@ -349,6 +367,23 @@ export default function StudentsPage() {
                               <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-blue-50 text-blue-700 border border-blue-200">
                                 <Fingerprint className="w-3 h-3" />
                                 Slot #{student.fingerprint_slot}
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-600 border border-slate-200">
+                                Belum Ada
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-3.5 px-3 text-center">
+                            {student.rfid_status === "enrolled" ? (
+                              <span
+                                className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-violet-50 text-violet-700 border border-violet-200"
+                                title={student.rfid_uid.join(", ")}
+                              >
+                                <CreditCard className="w-3 h-3" />
+                                {student.rfid_uid.length > 1
+                                  ? `${student.rfid_uid.length} Kartu`
+                                  : student.rfid_uid[0]}
                               </span>
                             ) : (
                               <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-600 border border-slate-200">
@@ -413,7 +448,9 @@ export default function StudentsPage() {
                       <p className="text-xs font-bold text-aici-dark">{student.full_name}</p>
                       <p className="text-[11px] font-mono text-aici-muted">{student.student_id} • {student.class_name}</p>
                     </div>
-                    {student.face_status === "enrolled" && student.fingerprint_status === "enrolled" ? (
+                    {student.face_status === "enrolled" &&
+                    (student.fingerprint_status === "enrolled" ||
+                      student.rfid_status === "enrolled") ? (
                       <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800">
                         2FA Lengkap
                       </span>
@@ -425,7 +462,9 @@ export default function StudentsPage() {
                   </div>
                   <div className="flex items-center justify-between pt-1">
                     <div className="text-[11px] text-aici-muted">
-                      Wajah: {student.face_status === "enrolled" ? "✓" : "✗"} • Jari: {student.fingerprint_status === "enrolled" ? `#${student.fingerprint_slot}` : "✗"}
+                      Wajah: {student.face_status === "enrolled" ? "✓" : "✗"} • Jari:{" "}
+                      {student.fingerprint_status === "enrolled" ? `#${student.fingerprint_slot}` : "✗"} • Kartu:{" "}
+                      {student.rfid_status === "enrolled" ? student.rfid_uid.join(", ") : "✗"}
                     </div>
                     <div className="flex items-center gap-3">
                       <button

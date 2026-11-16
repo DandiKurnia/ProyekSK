@@ -9,10 +9,12 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const classId = searchParams.get("class_id");
 
+    // rfid_cards (sumber kebenaran status kartu) di-embed 1:N; kolom dinormalkan
+    // agar sejajar face/fingerprint: rfid_uid = daftar UID, rfid_status derived.
     let query = supabaseServer
       .from("students")
       .select(
-        "student_id, full_name, class_id, face_status, fingerprint_status, fingerprint_slot, is_active, classes ( name )"
+        "student_id, full_name, class_id, face_status, fingerprint_status, fingerprint_slot, is_active, classes ( name ), rfid_cards ( uid )"
       )
       .order("full_name")
       .limit(500);
@@ -32,18 +34,24 @@ export async function GET(request: Request) {
         fingerprint_status: string;
         fingerprint_slot: number | null;
         is_active: boolean;
-      }) => ({
-        student_id: s.student_id,
-        full_name: s.full_name,
-        class_id: s.class_id,
-        class_name:
-          (Array.isArray(s.classes) ? s.classes[0]?.name : s.classes?.name) ??
-          s.class_id,
-        face_status: s.face_status,
-        fingerprint_status: s.fingerprint_status,
-        fingerprint_slot: s.fingerprint_slot,
-        is_active: s.is_active,
-      })
+        rfid_cards?: Array<{ uid: string }> | null;
+      }) => {
+        const uids = (s.rfid_cards ?? []).map((c) => c.uid);
+        return {
+          student_id: s.student_id,
+          full_name: s.full_name,
+          class_id: s.class_id,
+          class_name:
+            (Array.isArray(s.classes) ? s.classes[0]?.name : s.classes?.name) ??
+            s.class_id,
+          face_status: s.face_status,
+          fingerprint_status: s.fingerprint_status,
+          fingerprint_slot: s.fingerprint_slot,
+          rfid_uid: uids, // banyak kartu per siswa, sesuai skema rfid_cards
+          rfid_status: uids.length > 0 ? "enrolled" : "not_enrolled",
+          is_active: s.is_active,
+        };
+      }
     );
 
     return NextResponse.json({ students });
