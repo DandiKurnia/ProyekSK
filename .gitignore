@@ -22,3 +22,6 @@ skills-lock.json
 *.log
 oval_log.csv
 test_aligned_crop.jpg
+
+# Kredensial Wi-Fi firmware ESP32 (salin dari secrets.h.example)
+**/secrets.h

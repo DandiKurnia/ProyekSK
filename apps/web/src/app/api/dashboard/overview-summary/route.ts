@@ -42,6 +42,7 @@ export async function GET(request: Request) {
         seats: { total: 0, occupied: 0, empty: 0, unknown: 0 },
         devices: [],
         recent: [],
+        roster: [],
         device_offline_seconds: 60,
       });
     }
@@ -58,12 +59,13 @@ export async function GET(request: Request) {
       await Promise.all([
         supabaseServer
           .from("students")
-          .select("student_id", { count: "exact", head: true })
+          .select("student_id, full_name")
           .eq("class_id", activeClassId)
-          .eq("is_active", true),
+          .eq("is_active", true)
+          .order("full_name"),
         supabaseServer
           .from("attendance")
-          .select("status")
+          .select("student_id, status, check_in_at, check_out_at")
           .eq("class_id", activeClassId)
           .eq("date", dateParam),
         supabaseServer
@@ -87,7 +89,22 @@ export async function GET(request: Request) {
           .limit(10),
       ]);
 
-    const totalStudents = studentsRes.count ?? 0;
+    const totalStudents = (studentsRes.data ?? []).length;
+
+    // Satu baris attendance per (student, class, date) → status per siswa.
+    const byStudent = new Map(
+      (attendanceRes.data ?? []).map((a) => [a.student_id, a])
+    );
+    const roster = (studentsRes.data ?? []).map((s) => {
+      const row = byStudent.get(s.student_id);
+      return {
+        student_id: s.student_id,
+        full_name: s.full_name,
+        status: row?.status ?? "absent",
+        check_in_at: row?.check_in_at ?? null,
+        check_out_at: row?.check_out_at ?? null,
+      };
+    });
     const attRows = attendanceRes.data ?? [];
     let present = 0;
     let late = 0;
@@ -164,6 +181,7 @@ export async function GET(request: Request) {
       seats: seatBuckets,
       devices,
       recent,
+      roster,
       device_offline_seconds: offlineSec,
     });
   } catch (err: unknown) {

@@ -174,3 +174,107 @@ export function TwoFactorDistributionCard({
     </div>
   );
 }
+
+const STATUS_TONE: Record<string, string> = {
+  present: "bg-aici-success-bg text-aici-success",
+  late: "bg-aici-warning-bg text-aici-warning",
+  failed: "bg-aici-error-bg text-aici-error",
+  expired: "bg-aici-error-bg text-aici-error",
+  absent: "bg-aici-surface-nested text-aici-muted",
+};
+
+const STATUS_LABEL: Record<string, string> = {
+  present: "Hadir",
+  late: "Terlambat",
+  failed: "Gagal 2FA",
+  expired: "Hangus",
+  absent: "Tidak Hadir",
+};
+
+/** Jam WIB "HH:MM" dari ISO; null → "—". */
+function hm(iso: string | null): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Jakarta",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(d);
+}
+
+export function StudentRosterCard({
+  data,
+  loading,
+}: {
+  data: OverviewSummary | null;
+  loading: boolean;
+}) {
+  const roster = data?.roster ?? [];
+
+  return (
+    <div className="bg-aici-surface rounded-2xl p-5 shadow-sm">
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-sm font-bold text-aici-dark">
+          Status Kehadiran per Siswa
+        </h2>
+        <span className="text-[11px] font-mono text-aici-muted">
+          {roster.length} siswa · {data?.date ?? "—"}
+        </span>
+      </div>
+
+      {loading || !data ? (
+        <div className="space-y-2">
+          <div className="h-7 bg-aici-surface-nested rounded animate-pulse" />
+          <div className="h-7 bg-aici-surface-nested rounded animate-pulse" />
+          <div className="h-7 bg-aici-surface-nested rounded animate-pulse" />
+        </div>
+      ) : roster.length === 0 ? (
+        <p className="text-xs text-aici-muted">
+          Tidak ada siswa aktif pada kelas ini.
+        </p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="text-left text-[10px] uppercase tracking-wide text-aici-muted">
+                <th className="py-1.5 pr-3 font-semibold">Nama</th>
+                <th className="py-1.5 pr-3 font-semibold">NIS</th>
+                <th className="py-1.5 pr-3 font-semibold">Status</th>
+                <th className="py-1.5 pr-3 font-semibold">Masuk</th>
+                <th className="py-1.5 font-semibold">Pulang</th>
+              </tr>
+            </thead>
+            <tbody>
+              {roster.map((s) => (
+                <tr
+                  key={s.student_id}
+                  className="border-t border-aici-border text-aici-dark"
+                >
+                  <td className="py-2 pr-3 font-medium">
+                    {s.full_name ?? "—"}
+                  </td>
+                  <td className="py-2 pr-3 font-mono text-aici-muted">
+                    {s.student_id}
+                  </td>
+                  <td className="py-2 pr-3">
+                    <span
+                      className={`inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                        STATUS_TONE[s.status] ?? STATUS_TONE.absent
+                      }`}
+                    >
+                      {STATUS_LABEL[s.status] ?? s.status}
+                    </span>
+                  </td>
+                  <td className="py-2 pr-3 font-mono">{hm(s.check_in_at)}</td>
+                  <td className="py-2 font-mono">{hm(s.check_out_at)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}

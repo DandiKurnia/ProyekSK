@@ -4,12 +4,13 @@ import { useCallback, useEffect, useState } from "react";
 import { Sidebar } from "@/components/Sidebar";
 import { Topbar } from "@/components/Topbar";
 import { KpiGrid, SeatOccupancyCard } from "@/components/KpiCards";
-import {
-  DeviceHealthCard,
-  TwoFactorDistributionCard,
-} from "@/components/DetailCards";
 import type { OverviewSummary } from "@/lib/overview";
 import { supabase } from "@/lib/supabase";
+import {
+  DeviceHealthCard,
+  StudentRosterCard,
+  TwoFactorDistributionCard,
+} from "@/components/DetailCards";
 
 function todayJakarta(): string {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Jakarta" }).format(
@@ -19,16 +20,18 @@ function todayJakarta(): string {
 
 export default function OverviewPage() {
   const [classId, setClassId] = useState<string | null>(null);
-  const [date] = useState<string>(todayJakarta());
+  const [date, setDate] = useState<string>(todayJakarta());
   const [data, setData] = useState<OverviewSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [realtimeLive, setRealtimeLive] = useState(true);
 
   const load = useCallback(
-    async (cid?: string) => {
-      setLoading(true);
-      setError(null);
+    async (cid?: string, silent = false) => {
+      if (!silent) {
+        setLoading(true);
+        setError(null);
+      }
       try {
         const params = new URLSearchParams({
           date,
@@ -44,9 +47,9 @@ export default function OverviewPage() {
         // Klas pertama jadi kelas default (prd-overview.md §1)
         if (!cid && !classId && json.class_id) setClassId(json.class_id);
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
+        if (!silent) setError(e instanceof Error ? e.message : String(e));
       } finally {
-        setLoading(false);
+        if (!silent) setLoading(false);
       }
     },
     [date, classId]
@@ -66,17 +69,17 @@ export default function OverviewPage() {
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "attendance" },
-        () => load()
+        () => load(undefined, true)
       )
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "seat_status" },
-        () => load()
+        () => load(undefined, true)
       )
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "devices" },
-        () => load()
+        () => load(undefined, true)
       )
       .subscribe((status) => {
         if (status === "SUBSCRIBED") setRealtimeLive(true);
@@ -88,6 +91,24 @@ export default function OverviewPage() {
     };
   }, [classId, load]);
 
+  // ponytail: polling sunyi 15 dtk sampai publikasi realtime aktif
+  // (supabase/2026-11-16_realtime_publication.sql). Hapus bila push jalan.
+  useEffect(() => {
+    if (!classId) return;
+    const kick = () => load(undefined, true);
+    const id = setInterval(kick, 15000);
+    const vis = () => {
+      if (document.visibilityState === "visible") kick();
+    };
+    document.addEventListener("visibilitychange", vis);
+    window.addEventListener("pageshow", vis);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", vis);
+      window.removeEventListener("pageshow", vis);
+    };
+  }, [classId, load]);
+
   return (
     <div className="flex min-h-screen">
       <Sidebar active="Overview" />
@@ -96,6 +117,8 @@ export default function OverviewPage() {
           classes={data?.classes ?? []}
           activeClassId={classId}
           onClassChange={(id) => setClassId(id)}
+          date={date}
+          onDateChange={setDate}
           realtimeLive={realtimeLive}
           onRefresh={() => load()}
           refreshing={loading}
@@ -132,6 +155,9 @@ export default function OverviewPage() {
               <SeatOccupancyCard data={data} loading={loading} />
             </div>
           </div>
+
+          {/* Row 3: status per siswa (prd-overview.md §2.1 poin 4) */}
+          <StudentRosterCard data={data} loading={loading} />
         </main>
       </div>
     </div>

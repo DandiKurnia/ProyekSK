@@ -22,6 +22,14 @@ export interface RecentItem {
   fingerprint_slot: number | null;
 }
 
+export interface RosterItem {
+  student_id: string;
+  full_name: string | null;
+  status: string;
+  check_in_at: string | null;
+  check_out_at: string | null;
+}
+
 export interface OverviewSummary {
   date: string;
   class_id: string;
@@ -35,5 +43,6 @@ export interface OverviewSummary {
   seats: { total: number; occupied: number; empty: number; unknown: number };
   devices: DeviceInfo[];
   recent: RecentItem[];
+  roster: RosterItem[];
   device_offline_seconds: number;
 }
