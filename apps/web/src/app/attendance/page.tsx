@@ -24,6 +24,7 @@ import {
 import { Sidebar } from "@/components/Sidebar";
 import { Topbar } from "@/components/Topbar";
 import type { ClassOption } from "@/lib/overview";
+import { downloadCsv } from "@/lib/csv";
 
 interface AttendanceRow {
   id: string;
@@ -146,42 +147,20 @@ export default function AttendancePage() {
   }, [rows, search]);
 
   const exportCSV = () => {
-    const headers = [
-      "ID Transaksi",
-      "Jam Masuk",
-      "Jam Pulang",
-      "NIS/ID",
-      "Nama Lengkap",
-      "Kelas",
-      "Face Conf",
-      "Fingerprint Slot",
-      "Status",
-    ];
-    const csvContent = [
-      headers.join(","),
-      ...filteredRows.map((r) =>
-        [
-          r.id,
-          r.time,
-          r.check_out_at ?? "-",
-          r.student_id,
-          `"${r.full_name}"`,
-          `"${r.class_name}"`,
-          r.face_confidence ?? "-",
-          r.fingerprint_slot ?? "-",
-          r.status,
-        ].join(",")
-      ),
-    ].join("\n");
-
-    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.setAttribute("download", `attendance-${date}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    downloadCsv(`attendance-${date}.csv`, [
+      ["ID Transaksi", "Jam Masuk", "Jam Pulang", "NIS/ID", "Nama Lengkap", "Kelas", "Face Conf", "Fingerprint Slot", "Status"],
+      ...filteredRows.map((r) => [
+        r.id,
+        r.time,
+        r.check_out_at ?? "-",
+        r.student_id,
+        r.full_name,
+        r.class_name,
+        r.face_confidence ?? "-",
+        r.fingerprint_slot ?? "-",
+        r.status,
+      ]),
+    ]);
   };
 
   return (
