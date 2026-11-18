@@ -17,7 +17,7 @@ const MENU = [
   { label: "Students", icon: Users, href: "/students" },
   { label: "Classes & Seats", icon: Armchair, href: "/classes-seats" },
   { label: "Device Monitoring", icon: Cpu, href: "#" },
-  { label: "Reports", icon: BarChart3, href: "#" },
+  { label: "Reports", icon: BarChart3, href: "/reports" },
   { label: "Settings", icon: Settings, href: "/settings", badge: "ADMIN" },
 ];
 

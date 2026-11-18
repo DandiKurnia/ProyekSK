@@ -121,7 +121,7 @@ smart-classroom-attendance/
 |---|---|
 | Perancangan arsitektur | Selesai (dokumen ini) |
 | Implementasi service pengenalan wajah | Sebagian: FastAPI `/health` `/recognize` `/enroll` + jembatan serial R503/RC522 + 7 halaman web |
-| Implementasi dashboard Next.js | Sebagian: Overview, Attendance, Students, Classes & Seats, Devices, Reports, Settings, Login; data live Supabase |
+| Implementasi dashboard Next.js | Sebagian: Overview, Attendance, Camera, Students, Classes & Seats, Reports, Settings; data live Supabase. Belum: Devices, Login/Auth |
 | Firmware ESP32 (fingerprint & kartu RFID) | Kode selesai (`esp32R503_Serial/`), belum diuji di perangkat — butuh library `Adafruit Fingerprint Sensor` + `MFRC522` |
 | Firmware ESP32 load cell (kursi) | Belum dimulai |
 | Deployment dan pengujian lapangan | Belum dimulai |
