@@ -42,7 +42,7 @@ Vault Obsidian berisi seluruh dokumen kerja proyek: spesifikasi produk (PRD), do
 | [code-face-engine.md](docs/code-face-engine.md) | Telaah kode `face_engine.py` |
 | [code-main-py.md](docs/code-main-py.md) | Telaah kode `main.py` (FastAPI) |
 | [code-test-yunet-box.md](docs/code-test-yunet-box.md) | Catatan uji bounding box YuNet |
-| [tanya-jawab-piksel-dan-geometri-wajah.md](docs/tanya-jawab-piksel-dan-geometri-wajah.md) | Q&A piksel & geometri wajah |
+| [gerbang-ino-database.md](docs/gerbang-ino-database.md) | Gerbang .ino ke database: firmware -> gerbang Next.js/FastAPI -> tabel Supabase |
 | [archive/](docs/archive/) | Versi lama (Wi-Fi polling via cloud) — fallback bila USB tidak memungkinkan |
 
 ## Catatan & Bahan Lain
