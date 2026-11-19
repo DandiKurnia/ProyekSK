@@ -16,7 +16,7 @@
 // ===================== KONFIGURASI =====================
 // Dev: IP LAN laptop, mis. "http://192.168.1.10:3000/api/seats/status".
 // Produksi: host Next.js, mis. "https://xxx.vercel.app/api/seats/status".
-const char *API_URL = "http://192.168.1.10:3000/api/seats/status"; // IP LAN laptop (cek ipconfig sebelum flash)
+const char *API_URL = "http://192.168.1.6:3000/api/seats/status"; // IP LAN laptop (cek ipconfig sebelum flash)
 
 #include "secrets.h" // WIFI_SSID + WIFI_PASS — tidak di-commit, lihat secrets.h.example
 
