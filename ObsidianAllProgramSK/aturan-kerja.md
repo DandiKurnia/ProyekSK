@@ -15,6 +15,26 @@
 - Tujuannya agar tim tidak kagok, riwayat kerja terisolasi, dan mudah ganti branch antarfitur kapan saja.
 - Alur: pastikan branch induk bersih → `git checkout -b <tipe>/<nama>` → baru mulai coding.
 
+## Git Branch: JANGAN gabungkan branch tanpa izin
+
+- DILARANG `git merge`, `git rebase` lintas branch, cherry-pick, atau memasukkan satu branch ke branch lain **kecuali user memintanya eksplisit**.
+- Branch yang berdiri sendiri berarti memang belum mau digabung. Jangan "rapikan" dengan menggabungkannya hanya karena kelihatan tertinggal dari `main`.
+- **`feat/sensor-telemetry-display` (`fa617ab`) DILARANG digabung** ke branch mana pun dulu — user memutuskan branch ini tetap terpisah. Boleh di-push, tidak boleh di-merge/rebase ke branch lain.
+- Semua branch `feat/*` lain saat ini satu garis leluhur (`main → feat/rfid-card-2fa → feat/attendance-checkout → feat/reports → feat/auth`). Konsekuensi: branch yang dibuat dari ujung garis itu ikut membawa commit branch di bawahnya.
+- Sebelum membuat branch baru: kalau fiturnya **mandiri**, buat dari `main` (`git checkout main && git checkout -b feat/<nama>`), bukan menumpuk di ujung garis fitur. Kalau memang bergantung pada branch lain, sebutkan ketergantungannya ke user lebih dulu.
+- Sebelum mengusulkan PR/merge, hitung dulu isi PR (`git log --oneline main..<branch>`) dan laporkan commit mana saja yang ikut — jangan biarkan PR membawa fitur lain tanpa sepengetahuan user.
+
+## Alur Branch Tetap: branch → cek user → push → merge develop → hapus branch
+
+- Branch integrasi: `develop`. Fitur masuk `main` nanti hanya lewat `develop`.
+- Alur baku setiap pengerjaan, berurutan:
+  1. Kerjakan di branch baru: dari `main` bila fitur mandiri, atau dari branch induknya bila memang bergantung — sebutkan ketergantungannya ke user.
+  2. User cek hasil dulu.
+  3. Push branch ke GitHub SETELAH user setuju.
+  4. Merge branch ke `develop` (branch yang SUDAH di-push dan lolos cek).
+  5. Hapus branch fitur setelah merge (lokal + remote), kecuali yang diperintah bertahan (`feat/sensor-telemetry-display`).
+- Etap izin tetap berlaku: commit/push/merge/delete-remote masing-masing perlu perintah eksplisit user.
+
 ## Port & Proses Latar: JANGAN tinggalkan server menyala
 
 - Program apa pun yang dijalankan untuk mengecek — **npm** (`next dev`, `next start`) dan **python** (`uvicorn`, skrip uji) — **WAJIB dimatikan** begitu pengecekan selesai. Jangan ditinggal hidup sampai turn berikutnya.
