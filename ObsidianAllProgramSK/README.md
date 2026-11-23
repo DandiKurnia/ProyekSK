@@ -42,6 +42,8 @@ Vault Obsidian berisi seluruh dokumen kerja proyek: spesifikasi produk (PRD), do
 | [code-face-engine.md](docs/code-face-engine.md) | Telaah kode `face_engine.py` |
 | [code-main-py.md](docs/code-main-py.md) | Telaah kode `main.py` (FastAPI) |
 | [code-test-yunet-box.md](docs/code-test-yunet-box.md) | Catatan uji bounding box YuNet |
+| [code-komunikasi-r503.md](docs/code-komunikasi-r503.md) | Rantai kios R503: firmware `.ino` ↔ `fingerprint_serial.py` ↔ FastAPI, perintah & event baris |
+| [code-attendance-routes.md](docs/code-attendance-routes.md) | Kode Next.js jalur kios: proxy `/api/fingerprint/session` + penulis `attendance` |
 | [gerbang-ino-database.md](docs/gerbang-ino-database.md) | Gerbang .ino ke database: firmware -> gerbang Next.js/FastAPI -> tabel Supabase |
 | [archive/](docs/archive/) | Versi lama (Wi-Fi polling via cloud) — fallback bila USB tidak memungkinkan |
 

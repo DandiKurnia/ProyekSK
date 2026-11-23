@@ -28,7 +28,7 @@ Firmware ini **tidak** membuka Wi-Fi dan **tidak** menyentuh database. Ia hanya 
 | 345–386 | `setup()` | Serial, UART2, LCD, `verifyPassword()`, RC522, lapor `BOOT`/`READY` |
 | 388–419 | `loop()` | Prioritas: perintah → timeout kartu → cek kartu → verifikasi jari |
 
-> Peta lengkap kedua rantai firmware → database: [gerbang-ino-database.md](../ObsidianAllProgramSK/docs/gerbang-ino-database.md).
+> Peta lengkap kedua rantai firmware → database: [gerbang-ino-database.md](../ObsidianAllProgramSK/docs/gerbang-ino-database.md). Sisi Python yang memegang port COM: [python.md](python.md). Rantai penuh & sisi Next.js: [code-komunikasi-r503.md](../ObsidianAllProgramSK/docs/code-komunikasi-r503.md), [code-attendance-routes.md](../ObsidianAllProgramSK/docs/code-attendance-routes.md).
 
 ## 2. Pin & Wiring
 

@@ -8,6 +8,8 @@ Load cell ──HX711──> ESP32 ──Wi-Fi HTTP POST──> /api/seats/statu
 
 Firmware **menentukan status** (`occupied` / `empty` / `unknown`) dengan histeresis. Backend tidak menghitung ulang: ia memvalidasi, menyimpan, dan menulis heartbeat. Lihat [iot-monitoring.md](../ObsidianAllProgramSK/docs/iot-monitoring.md) untuk batasan konsepnya (kursi terisi ≠ hadir) dan [gerbang-ino-database.md](../ObsidianAllProgramSK/docs/gerbang-ino-database.md) untuk rantai kode sampai tabel Supabase.
 
+Potongan kode yang berkomunikasi ke laptop (Wi-Fi, `API_URL`, POST, retry) dibahas baris-per-baris di [komunikasi.md](komunikasi.md); sisi penerima Next.js (`route.ts` + `supabase-server.ts`) disalin di [nextjs.md](nextjs.md).
+
 ---
 
 ## 1. Peta Bagian Kode
