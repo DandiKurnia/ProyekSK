@@ -368,10 +368,8 @@ create index attendance_class_date_idx
   on public.attendance (class_id, date);
 
 
--- 8a. Migrasi 2026-11-16: absen pulang (check-out) — jalankan di Supabase SQL editor
--- alter table public.attendance add column if not exists check_out_at timestamptz;
--- insert into public.app_config (key, value) values ('checkout_after', '"12:00"')
---   on conflict (key) do nothing;
+-- 8a. Migrasi 2026-11-16: absen pulang (check-out) -> `supabase/2026-11-16_checkout.sql`
+--     (alter table attendance add column check_out_at + seed app_config.checkout_after)
 -- 9. Seats
 create table public.seats (
   seat_id      text primary key,
@@ -455,6 +453,7 @@ Tabel lain (`students`, `reports` via query, `app_config`) cukup via REST.
 
 - Jalankan DDL di atas via Supabase SQL Editor (atau Supabase CLI migration).
 - Setelah tabel jadi: aktifkan RLS + buat policy per role (admin full, teacher per `teacher_class_assignments`, observer read-only) — DDL policy `TBD` menyusul.
-- Nilai awal `app_config` yang wajib di-seed: `attendance_window`, `late_threshold`, `verification_timeout` (30 dtk), `seat_occupied_kg` (15 kg), `seat_hysteresis_seconds` (3 dtk), `device_offline_seconds` (60 dtk), `timezone` (`Asia/Jakarta`).
+- Nilai awal `app_config` yang wajib di-seed: `attendance_window`, `late_threshold`, `checkout_after` (`"12:00"`), `verification_timeout` (30 dtk), `seat_occupied_kg` (15 kg), `seat_hysteresis_seconds` (3 dtk), `device_offline_seconds` (60 dtk), `timezone` (`Asia/Jakarta`).
 - Estimasi ukuran: 100 siswa + 1 tahun absen harian (~20 ribu baris) jauh di bawah 500 MB free tier.
 - **Status live (2026-10-20):** Project `crflhxkaqqsrywqtfjef` seeded — `classes` 1, `students` 2, `devices` 1, `seats` 2 + `seat_status` 2, `app_config` 7 keys, `attendance` 0. RLS **dimatikan sementara** per tabel (publishable key return 0 sebelum dimatikan); aktifkan + policy per role setelah UI stabil. Realtime `attendance`/`seat_status`/`devices` TBD via Database → Replication.
+- **Status live (2026-11-23):** 8 key `app_config` termasuk `checkout_after` = `"12:00"`; kolom `attendance.check_out_at` ada (REST `select=check_out_at` -> 200).
